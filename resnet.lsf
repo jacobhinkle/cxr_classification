@@ -1,0 +1,22 @@
+#!/bin/bash
+
+#BSUB -P CSC378
+#BSUB -W 0:10
+#BSUB -nnodes 1
+#BSUB -J mimiccxr_resnet
+#BSUB -o output/job%J.o
+#BSUB -e output/job%J.e
+
+#BSUB -q batch
+#BSUB -rn
+
+#set -ex
+
+
+module load ibm-wml-ce
+
+export TORCH_HOME=$PROJWORK/csc378/4jh/torch_home
+
+jsrun -n1 -a1 -g1 \
+    -E TORCH_HOME \
+    $(which python) train_resnet.py

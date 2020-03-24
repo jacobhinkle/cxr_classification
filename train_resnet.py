@@ -15,10 +15,10 @@ class Trainer:
         model,
         train_data,
         num_epochs,
-        batch_size=1,
-        val_iters=None,
+        batch_size=64,
+        val_iters=100,
         val_data=None,
-        lr=0.1,
+        lr=1e-3,
         device='cuda',
     ):
         self.model = model
@@ -62,13 +62,11 @@ class Trainer:
     def batch_forward(self, X, Y, Ymask):
         weightsum = Ymask.sum().item()
         if weightsum == 0:
-            return  # skip unlabelled examples
+            return  # skip unlabelled batches
 
         X = X.type(torch.float32).to(device)
         Y = Y.type(torch.float32).to(device)
         Ymask = Ymask.to(device)
-
-        self.optim.zero_grad()
 
         preds = self.model(X)
 
@@ -77,7 +75,14 @@ class Trainer:
         return preds, bce, loss, X, Y, Ymask
 
     def iteration(self, *batch):
-        _, _, loss, _, _, _ = self.batch_forward(*batch)
+        self.optim.zero_grad()
+
+        outputs = self.batch_forward(*batch)
+        if outputs is None:
+            return
+        _, _, loss, _, _, _ = outputs
+
+        self.itbar.set_postfix(loss=loss.item())
 
         loss.backward()
 
@@ -87,6 +92,8 @@ class Trainer:
 
         if self.val_iters is not None and self.total_iters % self.val_iters == 0:
             self.validate()
+
+        return loss.item()
 
     def validate(self):
         self.model.eval()
@@ -99,11 +106,13 @@ class Trainer:
 
 if __name__ == '__main__':
     #model = tvresnet.resnet18(pretrained=True)
+    print("Loading model")
     model = densenet.densenet121(
-        pretrained=True,
+        pretrained=False,
         input_channels=1,
         num_classes=len(mimic_cxr_jpg.chexpert_labels),
     )
+    print("Model loaded")
 
     nparams = sum([p.numel() for p in model.parameters()])
     print('num params', nparams)
