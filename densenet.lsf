@@ -3,7 +3,7 @@
 #BSUB -P CSC378
 #BSUB -W 0:10
 #BSUB -nnodes 1
-#BSUB -J mimiccxr_resnet
+#BSUB -J mimiccxr_densenet
 #BSUB -o output/job%J.o
 #BSUB -e output/job%J.e
 
@@ -19,4 +19,4 @@ export TORCH_HOME=$PROJWORK/csc378/4jh/torch_home
 
 jsrun -n1 -a1 -g1 \
     -E TORCH_HOME \
-    $(which python) train_resnet.py
+    $(which python) train_densenet.py
