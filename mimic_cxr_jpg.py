@@ -47,14 +47,17 @@ class MIMICCXRJPGDataset(Dataset):
         labels=chexpert_labels,
         datadir=None,
         downscale_factor=None,
+        transform=None,
+        image_subdir='files',
         ):
         self.dataframe = dataframe
         self.labels = labels
         self.downscale_factor = downscale_factor
+        self.transform = transform
 
         if datadir is None:
             datadir = topdir
-        self.datadir = pathlib.Path(datadir) / 'files'
+        self.datadir = pathlib.Path(datadir) / image_subdir
 
     def __len__(self):
         return len(self.dataframe.index)
@@ -62,11 +65,16 @@ class MIMICCXRJPGDataset(Dataset):
     def __getitem__(self, ix):
         row = self.dataframe.iloc[ix]
 
-        im = torch.as_tensor(np.array(Image.open(self.datadir /
-            row.path))).unsqueeze(0)
+        im = Image.open(self.datadir / row.path)
+
+        if self.transform is not None:
+            im = self.transform(im)
+
+        im = torch.as_tensor(np.array(im)).unsqueeze(0)
 
         if self.downscale_factor is not None:
             im = F.avg_pool2d(im.type(torch.float32), self.downscale_factor)
+
 
         labels = row[self.labels].to_numpy().astype(float)
         labelmask = 1 - torch.as_tensor((

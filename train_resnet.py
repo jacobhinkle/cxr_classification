@@ -121,7 +121,9 @@ if __name__ == '__main__':
 
     model = model.to(device)
 
-    train, val, test = mimic_cxr_jpg.official_split(downscale_factor=4)
+    train, val, test = mimic_cxr_jpg.official_split(
+        image_subdir='train256x256',
+    )
 
     t = Trainer(model, train, 100, val_iters=1000, val_data=val, device=device)
 
