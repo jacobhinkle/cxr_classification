@@ -1,7 +1,7 @@
 """PyTorch Datasets for MIMIC-CXR-JPG"""
 
 import os
-import pathlib
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
-topdir = pathlib.Path('/gpfs/alpine/proj-shared/csc378/data/MIMIC-CXR-JPG')
+topdir = Path('/gpfs/alpine/proj-shared/csc378/data/MIMIC-CXR-JPG')
 chexpert_labels = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema',
     'Enlarged Cardiomediastinum', 'Fracture', 'Lung Lesion',
     'Lung Opacity', 'No Finding', 'Pleural Effusion', 'Pleural Other',
@@ -57,7 +57,7 @@ class MIMICCXRJPGDataset(Dataset):
 
         if datadir is None:
             datadir = topdir
-        self.datadir = pathlib.Path(datadir) / image_subdir
+        self.datadir = Path(datadir) / image_subdir
 
     def __len__(self):
         return len(self.dataframe.index)
@@ -85,22 +85,27 @@ class MIMICCXRJPGDataset(Dataset):
         return im, labels, labelmask
 
 
-def official_split(**kwargs):
+def official_split(datadir=topdir, **kwargs):
     """
     The MIMIC-CXR-JPG dataset comes with an official train-val-test split, which
     this function implements.
 
     Three datasets are returned in this order: train, validate, test.
     """
+    datadir = Path(datadir)
+
     allrecords = pd.merge(
-        pd.read_csv(topdir / 'splitpaths.csv.gz'),
-        pd.read_csv(topdir / 'mimic-cxr-2.0.0-chexpert.csv.gz'),
+        pd.read_csv(datadir / 'splitpaths.csv.gz'),
+        pd.read_csv(datadir / 'mimic-cxr-2.0.0-chexpert.csv.gz'),
         on=['subject_id', 'study_id'],
     )
 
-    train = MIMICCXRJPGDataset(allrecords.query('split == "train"'), **kwargs)
-    val = MIMICCXRJPGDataset(allrecords.query('split == "validate"'), **kwargs)
-    test = MIMICCXRJPGDataset(allrecords.query('split == "test"'), **kwargs)
+    train = MIMICCXRJPGDataset(allrecords.query('split == "train"'),
+            datadir=datadir, **kwargs)
+    val = MIMICCXRJPGDataset(allrecords.query('split == "validate"'),
+            datadir=datadir, **kwargs)
+    test = MIMICCXRJPGDataset(allrecords.query('split == "test"'),
+        datadir=datadir, **kwargs)
 
     return train, val, test
 
