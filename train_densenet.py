@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
@@ -121,6 +122,13 @@ if __name__ == '__main__':
     parser.add_argument('--learning-rate', default=1e-3, type=float,
             help='Learning rate for SGD.')
     args = parser.parse_args()
+
+    # Reproducibility
+    # cf. https://pytorch.org/docs/stable/notes/randomness.html
+    torch.manual_seed(0)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(0)
 
     print("Loading model")
     model = densenet.densenet121(
