@@ -106,6 +106,22 @@ class Trainer:
 
 if __name__ == '__main__':
     #model = tvresnet.resnet18(pretrained=True)
+    import argparse
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--datadir', '-d', default=mimic_cxr_jpg.topdir,
+            help='Top-level directory of MIMIC-CXR-JPG dataset download.')
+    parser.add_argument('--image-subdir', default='files',
+            help='Subdirectory of datadir holding JPG files.')
+    parser.add_argument('--epochs', default=100, type=int,
+            help='Number of epochs to train for.')
+    parser.add_argument('--val-iters', default=100, type=int,
+            help='Compute validation metrics every this many iterations.')
+    parser.add_argument('--batch-size', default=64, type=int,
+            help='Batch size for SGD.')
+    parser.add_argument('--learning-rate', default=1e-3, type=float,
+            help='Learning rate for SGD.')
+    args = parser.parse_args()
+
     print("Loading model")
     model = densenet.densenet121(
         pretrained=False,
@@ -122,9 +138,15 @@ if __name__ == '__main__':
     model = model.to(device)
 
     train, val, test = mimic_cxr_jpg.official_split(
-        image_subdir='files256x256',
+        datadir=args.datadir,
+        image_subdir=args.image_subdir,
     )
 
-    t = Trainer(model, train, 100, val_iters=1000, val_data=val, device=device)
+    t = Trainer(model, train, args.epochs,
+        batch_size=args.batch_size,
+        val_iters=args.val_iters,
+        val_data=val,
+        device=device,
+    )
 
     t.train()
