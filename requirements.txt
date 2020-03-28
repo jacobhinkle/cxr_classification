@@ -1,0 +1,3 @@
+pandas
+tqdm
+git+git://code-int.ornl.gov:4jh/torch_nlp_models.git
