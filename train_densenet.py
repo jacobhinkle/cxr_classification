@@ -1,4 +1,5 @@
 import numpy as np
+from sklearn.metrics import f1_score, roc_auc_score
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
@@ -6,8 +7,11 @@ import torchvision.models.resnet as tvresnet
 from tqdm import tqdm
 
 import mimic_cxr_jpg
+from torch_nlp_models.meters import CSVMeter
 
 from affine_augmentation import densenet
+
+import os
 
 
 class Trainer:
@@ -16,16 +20,22 @@ class Trainer:
         model,
         train_data,
         num_epochs,
+        output_dir,
         batch_size=64,
-        val_iters=100,
+        val_iters=None,
         val_data=None,
+        test_data=None,
         lr=1e-3,
         device='cuda',
+        progress = False,
     ):
         self.model = model
         self.num_epochs = num_epochs
         self.device = device
         self.val_iters = val_iters
+        self.output_dir = output_dir
+
+        self.progress = progress,
 
         self.train_loader = DataLoader(
             train_data,
@@ -34,14 +44,24 @@ class Trainer:
             num_workers=8,
             pin_memory=True,
         )
-        if val_data is not None:
-            self.val_loader = DataLoader(
+        self.val_loader = DataLoader(
             val_data,
             batch_size=batch_size,
             shuffle=False,
             num_workers=8,
             pin_memory=True,
-        )
+        ) if val_data is not None else None
+        self.test_loader = DataLoader(
+            test_data,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=8,
+            pin_memory=True,
+        ) if test_data is not None else None
+
+        self.epoch_meter = CSVMeter(os.path.join(self.output_dir, 'epoch_metrics.csv'), buffering=1)
+        self.val_meter = CSVMeter(os.path.join(self.output_dir, 'val_metrics.csv'), buffering=1)
+        self.iter_meter = CSVMeter(os.path.join(self.output_dir, 'iter_metrics.csv'))
 
         self.criterion = nn.BCEWithLogitsLoss(reduction='none')
         self.optim = optim.SGD(self.model.parameters(), lr=lr)
@@ -52,13 +72,21 @@ class Trainer:
         self.epbar = range(self.num_epochs)
         self.epbar = tqdm(self.epbar, desc='epoch')
         for self._epoch in self.epbar:
-            self.epoch()
+            eploss = self.epoch()
+            valmetrics = self.validate() if self.val_iters is None else {}
+            self.epoch_meter.update(train_loss=eploss, **valmetrics)
 
     def epoch(self):
         self.itbar = self.train_loader
         self.itbar = tqdm(self.itbar, desc='iter')
+        eploss = 0
         for self._iter, batch in enumerate(self.itbar):
-            self.iteration(*batch)
+            itloss = self.iteration(*batch)
+            if itloss is None:
+                continue
+            self.iter_meter.update(loss=itloss)
+            eploss += itloss / len(self.train_loader)
+        return eploss
 
     def batch_forward(self, X, Y, Ymask):
         weightsum = Ymask.sum().item()
@@ -92,17 +120,44 @@ class Trainer:
         self.total_iters += 1
 
         if self.val_iters is not None and self.total_iters % self.val_iters == 0:
-            self.validate()
+            valmetrics = self.validate()
+            self.val_meter.update(**valmetrics)
 
         return loss.item()
 
     def validate(self):
         self.model.eval()
-        for self._iter, batch in enumerate(self.itbar):
-            preds, _, loss, _, Y, Ymask = self.batch_forward(*batch)
-            # compute metrics based on preds, loss, Y, Ymask
+        metrics = {}
+        for split, loader in [('val', self.val_loader), ('test', self.test_loader)]:
+            valbar = loader
+            if self.progress:
+                valbar = tqdm(valbar, desc=split)
+            valloss = 0
+            Ypreds, Yactual = {}, {}
+            for task in mimic_cxr_jpg.chexpert_labels:
+                Ypreds[task], Yactual[task] = [], []
+            for batch in valbar:
+                with torch.no_grad():
+                    preds, bce, loss, X, Y, Ymask = self.batch_forward(*batch)
+                for i, task in enumerate(mimic_cxr_jpg.chexpert_labels):
+                    pred = preds[:, i].detach()
+                    mask = Ymask[:, i] == 1
+                    Yactual[task].append(Y[mask, i].cpu().numpy())
+                    Ypreds[task].append(pred[mask].cpu().numpy())
+                valloss += loss.detach().cpu().item()
 
+            metrics[split + '_loss'] = valloss/len(valbar)
+
+            for task in mimic_cxr_jpg.chexpert_labels:
+                Yp = np.concatenate(Ypreds[task], axis=0)
+                Ya = np.concatenate(Yactual[task], axis=0)
+
+                try:
+                    metrics[split + '_auc_' + task] = roc_auc_score(Ya, Yp)
+                except ValueError:  # only one class predicted
+                    metrics[split + '_auc_' + task] = 0
         self.model.train()
+        return metrics
 
 
 if __name__ == '__main__':
@@ -111,12 +166,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--datadir', '-d', default=mimic_cxr_jpg.topdir,
             help='Top-level directory of MIMIC-CXR-JPG dataset download.')
+    parser.add_argument('--outputdir', '-o', required=True,
+            help='Where to write outputs (trained weights, CSV of metrics)')
     parser.add_argument('--image-subdir', default='files',
             help='Subdirectory of datadir holding JPG files.')
     parser.add_argument('--epochs', default=100, type=int,
             help='Number of epochs to train for.')
-    parser.add_argument('--val-iters', default=100, type=int,
-            help='Compute validation metrics every this many iterations.')
+    parser.add_argument('--val-iters', default=None, type=int,
+            help='Compute validation metrics every this many iterations. None for once per epoch.')
     parser.add_argument('--batch-size', default=64, type=int,
             help='Batch size for SGD.')
     parser.add_argument('--learning-rate', default=1e-3, type=float,
@@ -150,10 +207,11 @@ if __name__ == '__main__':
         image_subdir=args.image_subdir,
     )
 
-    t = Trainer(model, train, args.epochs,
+    t = Trainer(model, train, args.epochs, args.outputdir,
         batch_size=args.batch_size,
         val_iters=args.val_iters,
         val_data=val,
+        test_data=test,
         device=device,
     )
 
