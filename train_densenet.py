@@ -1,5 +1,5 @@
 import numpy as np
-from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.metrics import f1_score, roc_auc_score, average_precision_score, precision_recall_curve, auc
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
@@ -128,17 +128,21 @@ class Trainer:
     def validate(self):
         self.model.eval()
         metrics = {}
-        for split, loader in [('val', self.val_loader), ('test', self.test_loader)]:
+        splits = [('val', self.val_loader), ('test', self.test_loader)]
+        for i, (split, loader) in enumerate(splits):
             valbar = loader
             if self.progress:
-                valbar = tqdm(valbar, desc=split)
+                valbar = tqdm(valbar, desc=split, position=len(splits)-i)
             valloss = 0
             Ypreds, Yactual = {}, {}
             for task in mimic_cxr_jpg.chexpert_labels:
                 Ypreds[task], Yactual[task] = [], []
             for batch in valbar:
                 with torch.no_grad():
-                    preds, bce, loss, X, Y, Ymask = self.batch_forward(*batch)
+                    batchout = self.batch_forward(*batch)
+                    if batchout is None:
+                        continue
+                    preds, bce, loss, X, Y, Ymask = batchout
                 for i, task in enumerate(mimic_cxr_jpg.chexpert_labels):
                     pred = preds[:, i].detach()
                     mask = Ymask[:, i] == 1
@@ -151,6 +155,9 @@ class Trainer:
             for task in mimic_cxr_jpg.chexpert_labels:
                 Yp = np.concatenate(Ypreds[task], axis=0)
                 Ya = np.concatenate(Yactual[task], axis=0)
+
+                ap = average_precision_score(Ya, Yp)
+                metrics[split + '_avg_prec_' + task] = ap
 
                 try:
                     metrics[split + '_auc_' + task] = roc_auc_score(Ya, Yp)
