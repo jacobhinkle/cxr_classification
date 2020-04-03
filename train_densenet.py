@@ -178,6 +178,15 @@ if __name__ == '__main__':
             help='Batch size for SGD.')
     parser.add_argument('--learning-rate', default=1e-3, type=float,
             help='Learning rate for SGD.')
+    parser.add_argument('--label-method', default='ignore_uncertain', choices=[
+        'ignore_uncertain',
+        'zeros_uncertain',
+        'ones_uncertain',
+        'three_class',
+        'four_class',
+        'missing_neg',
+        ],
+            help='Labelling method. "No Finding" will always use "missing_neg".')
     args = parser.parse_args()
 
     # Reproducibility
@@ -205,6 +214,7 @@ if __name__ == '__main__':
     train, val, test = mimic_cxr_jpg.official_split(
         datadir=args.datadir,
         image_subdir=args.image_subdir,
+        label_method=args.label_method,
     )
 
     t = Trainer(model, train, args.epochs, args.outputdir,

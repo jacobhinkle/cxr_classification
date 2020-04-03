@@ -40,6 +40,53 @@ class MIMICCXRJPGDataset(Dataset):
     equally as missing data.  Missing data is indicated by an additional
     length-14 int8 vector called labelmask, whose ones indicate positive or
     negative labels and whose zeros indicate missing labels for this example.
+
+    You can request various behaviors for how these uncertain labels are
+    treated, using the 'label_method' argument:
+        - 'ignore_uncertain' (default):
+            - corresponds to U-Ignore in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels
+            - mask: zero whenever label is missing or unknown
+        - 'zero_uncertain':
+            - corresponds to U-Zeros in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels or unknown
+            - mask: zero whenever label is missing. one otherwise
+        - 'ones_uncertain':
+            - corresponds to U-Ones in CheXpert paper
+            - 1 = positive labels or unknown
+            - 0 = negative labels
+            - mask: zero whenever label is missing. one otherwise
+        - 'three_class':
+            - corresponds to U-MultiClass in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels
+            - 2 = unknown
+            - mask: zero whenever label is missing. one otherwise
+        - 'four_class':
+            - not implemented in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels
+            - 2 = unknown
+            - 3 = missing
+            - mask: all ones
+        - 'missing_neg':
+            - not implemented in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels and missing
+            - mask: zero when unknown. one otherwise
+
+    If 'label_method' is a string, that method is applied to all labels. If it
+    is a 'dict', then the keys must be the names of the conditions (exhaustive),
+    and the values must be strings indicating which method to use.
+
+    Note that 'No Finding' is "assigned a positive label (1) if
+    there is no pathology classified as positive or uncertain" [1]. Therefore it
+    only obtains values of 1 or missing, so 'missing_neg' is applied to 'No
+    Finding' unless explicitly overridden by providing 'label_method' as a dict.
+
+    [1] CheXpert paper: https://arxiv.org/pdf/1901.07031.pdf
     """
     def __init__(
         self,
@@ -49,11 +96,20 @@ class MIMICCXRJPGDataset(Dataset):
         downscale_factor=None,
         transform=None,
         image_subdir='files',
+        label_method='ignore_uncertain',
         ):
         self.dataframe = dataframe
         self.labels = labels
         self.downscale_factor = downscale_factor
         self.transform = transform
+
+        if isinstance(label_method, str):
+            label_method = {k: label_method for k in chexpert_labels}
+            label_method['No Finding'] = 'missing_neg'
+        elif not isinstance(label_method, dict):
+            raise TypeError('label_method must be string or dict.')
+        assert len(label_method) == len(chexpert_labels)
+        self.label_method = label_method
 
         if datadir is None:
             datadir = topdir
@@ -61,6 +117,52 @@ class MIMICCXRJPGDataset(Dataset):
 
     def __len__(self):
         return len(self.dataframe.index)
+
+    def map_labels(self, row):
+        labels = []
+        mask = []
+        for i, c in enumerate(chexpert_labels):
+            m = self.label_method[c]
+            l = float(row[i])
+            if m == 'ignore_uncertain':
+                mask.append(1 - np.isnan(l) + (l == -1.0))
+                labels.append(l == 1.0)
+            elif m == 'zeros_uncertain':
+                mask.append(1 - np.isnan(l))
+                if l == -1.0:
+                    labels.append(0)
+                else:
+                    labels.append(l)
+            elif m == 'ones_uncertain':
+                mask.append(1 - np.isnan(l))
+                if l == -1.0:
+                    labels.append(1)
+                else:
+                    labels.append(l)
+            elif m == 'three_class':
+                mask.append(1 - np.isnan(l))
+                if l == -1.0:
+                    labels.append(2)
+                else:
+                    labels.append(l)
+            elif m == 'four_class':
+                mask.append(1)
+                if l == -1.0:
+                    labels.append(2)
+                elif np.isnan(l):
+                    labels.append(3)
+                else:
+                    labels.append(l)
+            elif m == 'missing_neg':
+                mask.append(1 - (l == -1.0))
+                labels.append(l == 1.0)
+            else:
+                raise ValueError(f'Unknown label method: {m}')
+
+        labels = torch.as_tensor(labels).type(torch.int8)
+        mask = torch.as_tensor(mask).type(torch.int8)
+
+        return labels, mask
 
     def __getitem__(self, ix):
         row = self.dataframe.iloc[ix]
@@ -75,12 +177,7 @@ class MIMICCXRJPGDataset(Dataset):
         if self.downscale_factor is not None:
             im = F.avg_pool2d(im.type(torch.float32), self.downscale_factor)
 
-
-        labels = row[self.labels].to_numpy().astype(float)
-        labelmask = 1 - torch.as_tensor((
-            np.isnan(labels) + (labels == -1.0)
-            ).astype(np.int8))
-        labels = torch.as_tensor((labels == 1.0).astype(np.int8))
+        labels, labelmask = self.map_labels(row[self.labels])
 
         return im, labels, labelmask
 
