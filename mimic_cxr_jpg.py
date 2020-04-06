@@ -48,7 +48,7 @@ class MIMICCXRJPGDataset(Dataset):
             - 1 = positive labels
             - 0 = negative labels
             - mask: zero whenever label is missing or unknown
-        - 'zero_uncertain':
+        - 'zeros_uncertain':
             - corresponds to U-Zeros in CheXpert paper
             - 1 = positive labels
             - 0 = negative labels or unknown
@@ -58,6 +58,16 @@ class MIMICCXRJPGDataset(Dataset):
             - 1 = positive labels or unknown
             - 0 = negative labels
             - mask: zero whenever label is missing. one otherwise
+        - 'zeros_uncertain_nomask':
+            - corresponds to U-Zeros in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels, missing, or unknown
+            - mask: all ones
+        - 'ones_uncertain_nomask':
+            - corresponds to U-Ones in CheXpert paper
+            - 1 = positive labels or unknown
+            - 0 = negative labels or missing
+            - mask: all ones
         - 'three_class':
             - corresponds to U-MultiClass in CheXpert paper
             - 1 = positive labels
@@ -137,6 +147,22 @@ class MIMICCXRJPGDataset(Dataset):
                 mask.append(1 - np.isnan(l))
                 if l == -1.0:
                     labels.append(1)
+                else:
+                    labels.append(l)
+            elif m == 'zeros_uncertain_nomask':
+                mask.append(1)
+                if l == -1.0:
+                    labels.append(0)
+                elif np.isnan(l):
+                    labels.append(0)
+                else:
+                    labels.append(l)
+            elif m == 'ones_uncertain_nomask':
+                mask.append(1)
+                if l == -1.0:
+                    labels.append(1)
+                elif np.isnan(l):
+                    labels.append(0)
                 else:
                     labels.append(l)
             elif m == 'three_class':

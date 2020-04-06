@@ -70,7 +70,7 @@ class Trainer:
 
     def train(self):
         self.epbar = range(self.num_epochs)
-        self.epbar = tqdm(self.epbar, desc='epoch')
+        self.epbar = tqdm(self.epbar, desc='epoch', position=2)
         for self._epoch in self.epbar:
             eploss = self.epoch()
             valmetrics = self.validate() if self.val_iters is None else {}
@@ -78,7 +78,7 @@ class Trainer:
 
     def epoch(self):
         self.itbar = self.train_loader
-        self.itbar = tqdm(self.itbar, desc='iter')
+        self.itbar = tqdm(self.itbar, desc='iter', position=1, leave=False)
         eploss = 0
         for self._iter, batch in enumerate(self.itbar):
             itloss = self.iteration(*batch)
@@ -132,7 +132,7 @@ class Trainer:
         for i, (split, loader) in enumerate(splits):
             valbar = loader
             if self.progress:
-                valbar = tqdm(valbar, desc=split, position=len(splits)-i)
+                valbar = tqdm(valbar, desc=split, position=0, leave=False)
             valloss = 0
             Ypreds, Yactual = {}, {}
             for task in mimic_cxr_jpg.chexpert_labels:
@@ -189,11 +189,13 @@ if __name__ == '__main__':
         'ignore_uncertain',
         'zeros_uncertain',
         'ones_uncertain',
+        'zeros_uncertain_nomask',
+        'ones_uncertain_nomask',
         'three_class',
         'four_class',
         'missing_neg',
         ],
-            help='Labelling method. "No Finding" will always use "missing_neg".')
+            help='Labeling method. "No Finding" will always use "missing_neg".')
     args = parser.parse_args()
 
     # Reproducibility
