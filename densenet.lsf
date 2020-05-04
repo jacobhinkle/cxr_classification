@@ -10,13 +10,17 @@
 #BSUB -q batch
 #BSUB -rn
 
-#set -ex
-
-
 module load ibm-wml-ce
+
+# Be verbose but _after_ loading modules so we don't spam the logs
+set -ex
+
+# remove the batch node so we only include compute nodes
+NNODES=$(echo $LSB_HOSTS | tr ' ' '\n' | sort -u | grep -v batch | wc -l)
+echo "Running job with ${NNODES} compute nodes"
 
 export TORCH_HOME=$PROJWORK/csc378/4jh/torch_home
 
-jsrun -n1 -a1 -g1 \
+jsrun -n${NNODES} -r1 -a1 -g6 -c47 \
     -E TORCH_HOME \
     $(which python) train_densenet.py
