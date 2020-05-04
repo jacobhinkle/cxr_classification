@@ -10,7 +10,8 @@
 #BSUB -q batch
 #BSUB -rn
 
-module load ibm-wml-ce
+module load ibm-wml-ce/1.7.0-2
+conda activate basic
 
 # Be verbose but _after_ loading modules so we don't spam the logs
 set -ex
@@ -19,8 +20,14 @@ set -ex
 NNODES=$(echo $LSB_HOSTS | tr ' ' '\n' | sort -u | grep -v batch | wc -l)
 echo "Running job with ${NNODES} compute nodes"
 
+# for saving model weights and so forth
 export TORCH_HOME=$PROJWORK/csc378/4jh/torch_home
+mkdir -p $TORCH_HOME
 
-jsrun -n${NNODES} -r1 -a1 -g6 -c47 \
+JOBDIR=output/$LSB_JOBID
+mkdir -p $JOBDIR
+
+jsrun -n${NNODES} -r1 -a1 -g6 -c42 \
     -E TORCH_HOME \
-    $(which python) train_densenet.py
+    $(which python) train_densenet.py \
+        -o $JOBDIR
