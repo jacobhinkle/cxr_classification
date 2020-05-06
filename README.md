@@ -2,12 +2,31 @@
 
 Studies in classifying chest X-rays
 
-## Installation
+# Instruction for cloning this repository
+```
+Add ssh-key to code-int.ornl.gov 
+  -- Generate ssh-key: ssh-keygen -t ed25519 -C "email@example.com"
+  -- Update ssh-key on code-int: Setting > SSH Keys
+git clone --recursive git@code.ornl.gov:ai/imaging/medical/cxr_classification.git 
+```
+## package dependencies
 
 You will need a conda environment including pytorch, pandas, numpy,
 scikit-learn, torchvision, and pillow.
 
-### Summit
+You will also need `torch_nlp_models`.
+
+We currently use my `torch_nlp_models` repo, only because I like my `CSVMeters`
+class. I really should split this into its own package. Anyway, until then, you
+will need to do the following before running code in `cxr_classification`:
+```
+git clone https://code-int.ornl.gov/4jh/torch_nlp_models.git
+cd torch_nlp_models
+pip install .
+```
+If you get an access denied error please let me (Jacob Hinkle, 4jh@ornl.gov) know.
+
+### Instruction for environment setup on Summit
 
 On summit, you will need to clone the `ibm-wml-ce` conda env with the following
 commands
@@ -28,17 +47,6 @@ After creating the env, load it:
 conda activate powerai170
 ```
 
-### Install `torch_nlp_models`
-
-We currently use my `torch_nlp_models` repo, only because I like my `CSVMeters`
-class. I really should split this into its own package. Anyway, until then, you
-will need to do the following before running code in `cxr_classification`:
-```
-git clone https://code-int.ornl.gov/4jh/torch_nlp_models.git
-cd torch_nlp_models
-pip install .
-```
-If you get an access denied error please let me (Jacob Hinkle, 4jh@ornl.gov) know.
 
 # Usage
 
