@@ -3,10 +3,12 @@
 Studies in classifying chest X-rays
 
 # Instruction for cloning this repository
-```
 Add ssh-key to code-int.ornl.gov 
   -- Generate ssh-key: ssh-keygen -t ed25519 -C "email@example.com"
   -- Update ssh-key on code-int: Setting > SSH Keys
+```
+# if on summit
+module load git-lfs
 git clone --recursive git@code.ornl.gov:ai/imaging/medical/cxr_classification.git 
 ```
 ## package dependencies
