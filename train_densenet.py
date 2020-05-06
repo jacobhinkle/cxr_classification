@@ -35,7 +35,7 @@ class Trainer:
         self.val_iters = val_iters
         self.output_dir = output_dir
 
-        self.progress = progress,
+        self.progress = progress
 
         self.train_loader = DataLoader(
             train_data,
@@ -70,7 +70,8 @@ class Trainer:
 
     def train(self):
         self.epbar = range(self.num_epochs)
-        self.epbar = tqdm(self.epbar, desc='epoch', position=2)
+        if self.progress:
+            self.epbar = tqdm(self.epbar, desc='epoch', position=2)
         for self._epoch in self.epbar:
             eploss = self.epoch()
             valmetrics = self.validate() if self.val_iters is None else {}
@@ -78,7 +79,8 @@ class Trainer:
 
     def epoch(self):
         self.itbar = self.train_loader
-        self.itbar = tqdm(self.itbar, desc='iter', position=1, leave=False)
+        if self.progress:
+            self.itbar = tqdm(self.itbar, desc='iter', position=1, leave=False)
         eploss = 0
         for self._iter, batch in enumerate(self.itbar):
             itloss = self.iteration(*batch)
@@ -111,7 +113,8 @@ class Trainer:
             return
         _, _, loss, _, _, _ = outputs
 
-        self.itbar.set_postfix(loss=loss.item())
+        if self.progress:
+            self.itbar.set_postfix(loss=loss.item())
 
         loss.backward()
 
@@ -185,6 +188,8 @@ if __name__ == '__main__':
             help='Batch size for SGD.')
     parser.add_argument('--learning-rate', default=1e-3, type=float,
             help='Learning rate for SGD.')
+    parser.add_argument('--hide-progress', action='store_true',
+            help='Do not display progress bar.')
     parser.add_argument('--label-method', default='ignore_uncertain', choices=[
         'ignore_uncertain',
         'zeros_uncertain',
@@ -231,6 +236,7 @@ if __name__ == '__main__':
         val_iters=args.val_iters,
         val_data=val,
         test_data=test,
+        progress=not args.hide_progress,
         device=device,
     )
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #BSUB -P CSC378
-#BSUB -W 0:10
+#BSUB -W 0:30
 #BSUB -nnodes 1
 #BSUB -J mimiccxr_densenet
 #BSUB -o output/job%J.o
@@ -11,7 +11,7 @@
 #BSUB -rn
 
 module load ibm-wml-ce/1.7.0-2
-conda activate basic
+conda activate powerai170
 
 # Be verbose but _after_ loading modules so we don't spam the logs
 set -ex
@@ -24,10 +24,13 @@ echo "Running job with ${NNODES} compute nodes"
 export TORCH_HOME=$PROJWORK/csc378/4jh/torch_home
 mkdir -p $TORCH_HOME
 
-JOBDIR=output/$LSB_JOBID
+JOBDIR=output/job$LSB_JOBID
 mkdir -p $JOBDIR
 
 jsrun -n${NNODES} -r1 -a1 -g6 -c42 \
     -E TORCH_HOME \
     $(which python) train_densenet.py \
-        -o $JOBDIR
+        -o $JOBDIR \
+        --hide-progress \
+        --val-iters 200 \
+        --image-subdir files256x256
