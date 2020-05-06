@@ -26,7 +26,7 @@ mkdir -p $TORCH_HOME
 
 SEED=0
 FOLD=0
-JOBDIR=output/seed${SEED}/fold${FOLD}/job$LSB_JOBID
+JOBDIR=output/job${LSB_JOBID}/seed${SEED}/fold${FOLD}
 mkdir -p $JOBDIR
 
 jsrun -n${NNODES} -r1 -a1 -g6 -c42 \
