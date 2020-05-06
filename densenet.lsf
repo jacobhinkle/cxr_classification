@@ -24,7 +24,9 @@ echo "Running job with ${NNODES} compute nodes"
 export TORCH_HOME=$PROJWORK/csc378/4jh/torch_home
 mkdir -p $TORCH_HOME
 
-JOBDIR=output/job$LSB_JOBID
+SEED=0
+FOLD=0
+JOBDIR=output/seed${SEED}/fold${FOLD}/job$LSB_JOBID
 mkdir -p $JOBDIR
 
 jsrun -n${NNODES} -r1 -a1 -g6 -c42 \
