@@ -252,8 +252,11 @@ def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False, **kwargs):
     else:
         from sklearn.model_selection import KFold, train_test_split
         kf = KFold(num_folds)#, random_state=random_state, shuffle=True)
-        for k, (trainval_subj, test_subj) in enumerate(kf.split(allrecords['subject_id'].unique())):
+        uniq_subj = allrecords['subject_id'].unique()
+        for k, (trainval_ix, test_ix) in enumerate(kf.split(uniq_subj)):
             if k != fold: continue
+            trainval_subj = uniq_subj[trainval_ix]
+            test_subj = uniq_subj[trainval_ix]
             train_subj, val_subj = train_test_split(
                 trainval_subj,
                 test_size=val_size,
