@@ -190,6 +190,8 @@ if __name__ == '__main__':
             help='Learning rate for SGD.')
     parser.add_argument('--hide-progress', action='store_true',
             help='Do not display progress bar.')
+    parser.add_argument('--single-node-data-parallel', action='store_true',
+            help='Use torch.nn.DataParallel')
     parser.add_argument('--label-method', default='ignore_uncertain', choices=[
         'ignore_uncertain',
         'zeros_uncertain',
@@ -221,7 +223,11 @@ if __name__ == '__main__':
     nparams = sum([p.numel() for p in model.parameters()])
     print('num params', nparams)
 
-    device='cuda'
+    if args.single_node_data_parallel:
+        device = 'cuda:0'
+        model = nn.DataParallel(model)
+    else:
+        device='cuda'
 
     model = model.to(device)
 
