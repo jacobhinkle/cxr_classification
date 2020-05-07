@@ -6,6 +6,7 @@
 #BSUB -J mimiccxr_densenet
 #BSUB -o output/job%J.o
 #BSUB -e output/job%J.e
+#BSUB -alloc_flags "gpumps"
 
 #BSUB -q batch
 #BSUB -rn
@@ -31,11 +32,12 @@ mkdir -p $JOBDIR
 
 jsrun -n${NNODES} -r1 -a1 -g6 -c42 \
     -E TORCH_HOME \
-    $(which python) train_densenet.py \
+    $(which python) -m torch.distributed.launch --nproc_per_node=6 \
+      train_densenet.py \
         -o $JOBDIR \
         --learning-rate 1e-2 \
         --hide-progress \
-        --val-iters 200 \
         --image-subdir files256x256 \
-        --single-node-data-parallel \
-        --batch-size $((64*6))
+        --distributed-data-parallel \
+        --batch-size $((50)) \
+        #--val-iters 200 \

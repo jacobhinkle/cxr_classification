@@ -2,7 +2,10 @@ import numpy as np
 from sklearn.metrics import f1_score, roc_auc_score, average_precision_score, precision_recall_curve, auc
 import torch
 from torch import nn, optim
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 import torchvision.models.resnet as tvresnet
 from tqdm import tqdm
 
@@ -25,24 +28,28 @@ class Trainer:
         val_iters=None,
         val_data=None,
         test_data=None,
+        distributed=False,
         lr=1e-3,
         device='cuda',
         progress = False,
+        reporter = True,
     ):
         self.model = model
         self.num_epochs = num_epochs
         self.device = device
         self.val_iters = val_iters
         self.output_dir = output_dir
-
+        self.distributed = distributed
         self.progress = progress
+        self.reporter = reporter
 
         self.train_loader = DataLoader(
             train_data,
             batch_size=batch_size,
-            shuffle=True,
+            shuffle=not distributed,
             num_workers=8,
             pin_memory=True,
+            sampler=DistributedSampler(train_data, shuffle=True) if distributed else None,
         )
         self.val_loader = DataLoader(
             val_data,
@@ -50,6 +57,7 @@ class Trainer:
             shuffle=False,
             num_workers=8,
             pin_memory=True,
+            sampler=DistributedSampler(val_data) if distributed else None,
         ) if val_data is not None else None
         self.test_loader = DataLoader(
             test_data,
@@ -57,11 +65,13 @@ class Trainer:
             shuffle=False,
             num_workers=8,
             pin_memory=True,
+            sampler=DistributedSampler(test_data) if distributed else None,
         ) if test_data is not None else None
 
-        self.epoch_meter = CSVMeter(os.path.join(self.output_dir, 'epoch_metrics.csv'), buffering=1)
-        self.val_meter = CSVMeter(os.path.join(self.output_dir, 'val_metrics.csv'), buffering=1)
-        self.iter_meter = CSVMeter(os.path.join(self.output_dir, 'iter_metrics.csv'))
+        if self.reporter:
+            self.epoch_meter = CSVMeter(os.path.join(self.output_dir, 'epoch_metrics.csv'), buffering=1)
+            self.val_meter = CSVMeter(os.path.join(self.output_dir, 'val_metrics.csv'), buffering=1)
+            self.iter_meter = CSVMeter(os.path.join(self.output_dir, 'iter_metrics.csv'))
 
         self.criterion = nn.BCEWithLogitsLoss(reduction='none')
         self.optim = optim.SGD(self.model.parameters(), lr=lr)
@@ -70,23 +80,25 @@ class Trainer:
 
     def train(self):
         self.epbar = range(self.num_epochs)
-        if self.progress:
+        if self.progress and self.reporter:
             self.epbar = tqdm(self.epbar, desc='epoch', position=2)
         for self._epoch in self.epbar:
             eploss = self.epoch()
             valmetrics = self.validate() if self.val_iters is None else {}
-            self.epoch_meter.update(train_loss=eploss, **valmetrics)
+            if self.reporter:
+                self.epoch_meter.update(train_loss=eploss, **valmetrics)
 
     def epoch(self):
         self.itbar = self.train_loader
-        if self.progress:
+        if self.progress and self.reporter:
             self.itbar = tqdm(self.itbar, desc='iter', position=1, leave=False)
         eploss = 0
         for self._iter, batch in enumerate(self.itbar):
             itloss = self.iteration(*batch)
             if itloss is None:
                 continue
-            self.iter_meter.update(loss=itloss)
+            if self.reporter:
+                self.iter_meter.update(loss=itloss)
             eploss += itloss / len(self.train_loader)
         return eploss
 
@@ -113,7 +125,7 @@ class Trainer:
             return
         _, _, loss, _, _, _ = outputs
 
-        if self.progress:
+        if self.progress and self.reporter:
             self.itbar.set_postfix(loss=loss.item())
 
         loss.backward()
@@ -124,7 +136,8 @@ class Trainer:
 
         if self.val_iters is not None and self.total_iters % self.val_iters == 0:
             valmetrics = self.validate()
-            self.val_meter.update(**valmetrics)
+            if self.reporter:
+                self.val_meter.update(**valmetrics)
 
         return loss.item()
 
@@ -134,7 +147,7 @@ class Trainer:
         splits = [('val', self.val_loader), ('test', self.test_loader)]
         for i, (split, loader) in enumerate(splits):
             valbar = loader
-            if self.progress:
+            if self.progress and self.reporter:
                 valbar = tqdm(valbar, desc=split, position=0, leave=False)
             valloss = 0
             Ypreds, Yactual = {}, {}
@@ -152,6 +165,14 @@ class Trainer:
                     Yactual[task].append(Y[mask, i].cpu().numpy())
                     Ypreds[task].append(pred[mask].cpu().numpy())
                 valloss += loss.detach().cpu().item()
+
+            if self.distributed:
+                Ypreds, Yactual = torch.tensor(Ypreds), torch.tensor(Yactual)
+                # gather these two tensors asynchronously
+                hdl = dist.gather(Ypreds, dst=0, async_op=True)
+                dist.gather(Yactual, dst=0)
+                hdl.wait()
+                # after this point, only rank zero will have the full label set
 
             metrics[split + '_loss'] = valloss/len(valbar)
 
@@ -192,6 +213,10 @@ if __name__ == '__main__':
             help='Do not display progress bar.')
     parser.add_argument('--single-node-data-parallel', action='store_true',
             help='Use torch.nn.DataParallel')
+    parser.add_argument('--distributed-data-parallel', action='store_true',
+            help='Use torch.distributed for multi-node parallelism')
+    parser.add_argument('--local_rank', default=0, type=int,
+            help='Local rank for use when using distributed data parallelism')
     parser.add_argument('--label-method', default='ignore_uncertain', choices=[
         'ignore_uncertain',
         'zeros_uncertain',
@@ -223,27 +248,49 @@ if __name__ == '__main__':
     nparams = sum([p.numel() for p in model.parameters()])
     print('num params', nparams)
 
-    if args.single_node_data_parallel:
-        device = 'cuda:0'
-        model = nn.DataParallel(model)
-    else:
-        device='cuda'
-
-    model = model.to(device)
+    if args.single_node_data_parallel and args.distributed_data_parallel:
+        raise Exception("Max one of distributed or single-node data parallel can be requested.")
 
     train, val, test = mimic_cxr_jpg.official_split(
         datadir=args.datadir,
         image_subdir=args.image_subdir,
         label_method=args.label_method,
     )
+    sampler = None
 
-    t = Trainer(model, train, args.epochs, args.outputdir,
-        batch_size=args.batch_size,
-        val_iters=args.val_iters,
-        val_data=val,
-        test_data=test,
-        progress=not args.hide_progress,
-        device=device,
-    )
+    device = torch.device('cuda', args.local_rank)
+    model = model.to(device)
 
-    t.train()
+    rank = 0
+    if args.single_node_data_parallel:
+        model = nn.DataParallel(model)
+    elif args.distributed_data_parallel:
+        # get rank from MPI
+        dist.init_process_group('nccl')
+
+        rank = dist.get_rank()
+
+        args.learning_rate *= dist.get_world_size()
+
+        model = DDP(
+            model,
+            device_ids=[args.local_rank],
+            output_device=args.local_rank,
+        )
+
+    try:
+
+        t = Trainer(model, train, args.epochs, args.outputdir,
+            batch_size=args.batch_size,
+            val_iters=args.val_iters,
+            val_data=val,
+            test_data=test,
+            progress=not args.hide_progress,
+            reporter=rank == 0,
+            device=device,
+            distributed=args.distributed_data_parallel,
+        )
+
+        t.train()
+    finally:
+        dist.destroy_process_group()
