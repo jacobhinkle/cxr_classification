@@ -119,9 +119,18 @@ class Trainer:
             self.epbar = tqdm(self.epbar, desc='epoch', position=2)
         for self._epoch in self.epbar:
             eploss = self.epoch()
-            valmetrics = self.validate() if self.val_iters is None else {}
+            if self.val_iters is None:
+                valmetrics = self.validate()
+                if self.reporter:
+                    self.val_meter.update(**valmetrics)
+            else:
+                valmetrics = {}
             if self.reporter:
                 self.epoch_meter.update(train_loss=eploss, **valmetrics)
+                # flush all meters at least once per epoch
+                self.epoch_meter.flush()
+                self.val_meter.flush()
+                self.iter_meter.flush()
 
     def epoch(self):
         self.itbar = self.train_loader
