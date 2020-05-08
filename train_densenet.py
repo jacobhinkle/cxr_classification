@@ -14,6 +14,7 @@ from torch_nlp_models.meters import CSVMeter
 
 from affine_augmentation import densenet
 
+from datetime import datetime
 import os
 
 def all_gather_vectors(tensors, *, device='cuda'):
@@ -133,6 +134,9 @@ class Trainer:
                 self.iter_meter.flush()
 
     def epoch(self):
+        if self.reporter and not self.progress:
+            print(f"Starting epoch {self._epoch} of {self.num_epochs}")
+            epoch_start = datetime.now()
         self.itbar = self.train_loader
         if self.progress and self.reporter:
             self.itbar = tqdm(self.itbar, desc='iter', position=1, leave=False)
@@ -144,6 +148,9 @@ class Trainer:
             if self.reporter:
                 self.iter_meter.update(loss=itloss)
             eploss += itloss / len(self.train_loader)
+        if self.reporter and not self.progress:
+            epoch_time = datetime.now() - epoch_start
+            print(f"Epoch time: {epoch_time}")
         return eploss
 
     def batch_forward(self, X, Y, Ymask):
