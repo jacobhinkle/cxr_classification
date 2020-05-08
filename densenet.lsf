@@ -1,8 +1,6 @@
 #!/bin/bash
 
 #BSUB -P CSC378
-#BSUB -W 0:30
-#BSUB -nnodes 1
 #BSUB -J mimiccxr_densenet
 #BSUB -o output/job%J.o
 #BSUB -e output/job%J.e
@@ -11,6 +9,12 @@
 #BSUB -q batch
 #BSUB -rn
 
+#BSUB -W 2:00
+#BSUB -nnodes 1
+
+# ATTENTION: PLEASE SET THIS TO MATCH THE VALUE OF -nnodes ABOVE
+NNODES=1
+
 module load ibm-wml-ce/1.7.0-2
 conda activate powerai170
 
@@ -18,7 +22,7 @@ conda activate powerai170
 set -ex
 
 # remove the batch node so we only include compute nodes
-NNODES=$(echo $LSB_HOSTS | tr ' ' '\n' | sort -u | grep -v batch | wc -l)
+#NNODES=$(echo $LSB_HOSTS | tr ' ' '\n' | sort -u | grep -v batch | wc -l)
 echo "Running job with ${NNODES} compute nodes"
 
 # for saving model weights and so forth
