@@ -16,6 +16,37 @@ from affine_augmentation import densenet
 
 import os
 
+def all_gather_vectors(tensors, *, device='cuda'):
+    """
+    All-gather 1D GPU tensors with heterogeneous lengths.
+    """
+    world_size = dist.get_world_size()
+
+    assert isinstance(tensors, list)
+    assert len(tensors) > 0
+
+    # get the maximum length across all ranks
+    hdls = []
+    padded_tensors = []
+    szst = []
+    for t in tensors:
+        szs = [torch.tensor(1).to(device) for _ in range(world_size)]
+        dist.all_gather(szs, torch.tensor(t.shape[0]).to(device))
+        szst.append(szs)
+        maxlen = torch.tensor(szs).max().cpu().item()
+        pts = [torch.zeros((maxlen,), device=device, dtype=t.dtype)
+                for _ in range(world_size)]
+        padded_tensors.append(pts)
+        t_pad = torch.zeros_like(pts[0])
+        t_pad[:t.shape[0]] = t
+        hdls.append(dist.all_gather(pts, t_pad, async_op=True))
+    # Now wait to complete and reassemble
+    out = []
+    for h, pts, szs in zip(hdls, padded_tensors, szst):
+        h.wait()
+        c = torch.cat([pt[:s] for s, pt in zip(szs, pts)], 0)
+        out.append(c)
+    return out
 
 class Trainer:
     def __init__(
@@ -42,6 +73,10 @@ class Trainer:
         self.distributed = distributed
         self.progress = progress
         self.reporter = reporter
+
+        if distributed:
+            self.world_size = dist.get_world_size()
+            self.rank = dist.get_rank()
 
         self.train_loader = DataLoader(
             train_data,
@@ -165,20 +200,27 @@ class Trainer:
                     Yactual[task].append(Y[mask, i].cpu().numpy())
                     Ypreds[task].append(pred[mask].cpu().numpy())
                 valloss += loss.detach().cpu().item()
+            # concatenate batch predictions
+            for task in mimic_cxr_jpg.chexpert_labels:
+                Ypreds[task] = np.concatenate(Ypreds[task], axis=0)
+                Yactual[task] = np.concatenate(Yactual[task], axis=0)
 
             if self.distributed:
-                Ypreds, Yactual = torch.tensor(Ypreds), torch.tensor(Yactual)
-                # gather these two tensors asynchronously
-                hdl = dist.gather(Ypreds, dst=0, async_op=True)
-                dist.gather(Yactual, dst=0)
-                hdl.wait()
-                # after this point, only rank zero will have the full label set
+                allvectors = [torch.tensor(Ypreds[t]).to(device).contiguous()
+                            for t in mimic_cxr_jpg.chexpert_labels] \
+                        + [torch.tensor(Yactual[t]).to(device).contiguous()
+                            for t in mimic_cxr_jpg.chexpert_labels]
+                gathered = all_gather_vectors(allvectors, device=self.device)
+                for i, task in enumerate(mimic_cxr_jpg.chexpert_labels):
+                    Ypreds[task] = gathered[i]
+                    Yactual[task] = gathered[i +
+                            len(mimic_cxr_jpg.chexpert_labels)]
 
             metrics[split + '_loss'] = valloss/len(valbar)
 
             for task in mimic_cxr_jpg.chexpert_labels:
-                Yp = np.concatenate(Ypreds[task], axis=0)
-                Ya = np.concatenate(Yactual[task], axis=0)
+                Yp = Ypreds[task].cpu().numpy()
+                Ya = Yactual[task].cpu().numpy()
 
                 ap = average_precision_score(Ya, Yp)
                 metrics[split + '_avg_prec_' + task] = ap

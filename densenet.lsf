@@ -27,17 +27,25 @@ mkdir -p $TORCH_HOME
 
 SEED=0
 FOLD=0
-JOBDIR=output/job${LSB_JOBID}/seed${SEED}/fold${FOLD}
-mkdir -p $JOBDIR
+JOBDIR=output/job$(date +%y%m%d%H%M).${LSB_JOBID}
+FOLDDIR=$JOBDIR/seed${SEED}/fold${FOLD}
+mkdir -p $FOLDDIR
+
+BS=50
+SZ=256
+LR=1e-2
+
+echo "n${NNODES} lr${LR} ${SZ}^2 bs${BS}" > $JOBDIR/description
 
 jsrun -n${NNODES} -r1 -a1 -g6 -c42 \
+    -E OMP_NUM_THREADS=1 \
     -E TORCH_HOME \
     $(which python) -m torch.distributed.launch --nproc_per_node=6 \
       train_densenet.py \
-        -o $JOBDIR \
-        --learning-rate 1e-2 \
+        --outputdir $FOLDDIR \
+        --learning-rate $LR \
         --hide-progress \
-        --image-subdir files256x256 \
+        --image-subdir files${SZ}x${SZ} \
         --distributed-data-parallel \
-        --batch-size $((50)) \
+        --batch-size $BS \
         #--val-iters 200 \
