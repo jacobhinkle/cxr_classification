@@ -104,6 +104,11 @@ class Trainer:
             sampler=DistributedSampler(test_data) if distributed else None,
         ) if test_data is not None else None
 
+        print(f"Rank {self.rank} dl sizes:"
+                f" train {len(self.train_loader)}"
+                f" val {len(self.val_loader)}"
+                f" test {len(self.test_loader)}")
+
         if self.reporter:
             self.epoch_meter = CSVMeter(os.path.join(self.output_dir, 'epoch_metrics.csv'), buffering=1)
             self.val_meter = CSVMeter(os.path.join(self.output_dir, 'val_metrics.csv'), buffering=1)
@@ -154,15 +159,27 @@ class Trainer:
         return eploss
 
     def batch_forward(self, X, Y, Ymask):
-        weightsum = Ymask.sum().item()
-        if weightsum == 0:
-            return  # skip unlabelled batches
+        Ymask = Ymask.to(device)
+        weightsum = Ymask.sum()
+        if self.distributed:
+            # start reducing the number of weights in background early
+            with torch.no_grad():
+                weightsync_hdl = dist.all_reduce(weightsum, async_op=True)
 
         X = X.type(torch.float32).to(device)
         Y = Y.type(torch.float32).to(device)
-        Ymask = Ymask.to(device)
 
         preds = self.model(X)
+
+        if self.distributed:
+            weightsync_hdl.wait()
+        weightsum = weightsum.item()
+        if weightsum == 0:
+            # if _reduced_ weightsum is zero, then entire minibatch (every
+            # microbatch) holds no actual labels, and we can skip this
+            # iteration. Otherwise, all ranks must continue to participate in
+            # order to avoid a deadlock on the backward pass.
+            return
 
         bce = self.criterion(preds, Y)
         loss = (bce * Ymask).sum() / weightsum
@@ -193,6 +210,9 @@ class Trainer:
         return loss.item()
 
     def validate(self):
+        if self.reporter:
+            print("Computing validation and test metrics")
+        val_start = datetime.now()
         self.model.eval()
         metrics = {}
         splits = [('val', self.val_loader), ('test', self.test_loader)]
@@ -246,7 +266,22 @@ class Trainer:
                 except ValueError:  # only one class predicted
                     metrics[split + '_auc_' + task] = 0
         self.model.train()
+        if self.reporter:
+            print(f"Validation time: {datetime.now() - val_start}")
         return metrics
+
+
+def get_mpi_info():
+    """
+    Return node-local and global MPI ranks and sizes.
+
+    This is essentially how horovod finds local rank, although they do so with
+    the C interface to MPI.
+    """
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    local_comm = comm.Split_type(MPI.COMM_TYPE_SHARED)
+    return comm.Get_rank(), comm.Get_size(), local_comm.Get_rank(), local_comm.Get_size()
 
 
 if __name__ == '__main__':
@@ -273,8 +308,6 @@ if __name__ == '__main__':
             help='Use torch.nn.DataParallel')
     parser.add_argument('--distributed-data-parallel', action='store_true',
             help='Use torch.distributed for multi-node parallelism')
-    parser.add_argument('--local_rank', default=0, type=int,
-            help='Local rank for use when using distributed data parallelism')
     parser.add_argument('--label-method', default='ignore_uncertain', choices=[
         'ignore_uncertain',
         'zeros_uncertain',
@@ -295,13 +328,11 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False
     np.random.seed(0)
 
-    print("Loading model")
     model = densenet.densenet121(
         pretrained=False,
         input_channels=1,
         num_classes=len(mimic_cxr_jpg.chexpert_labels),
     )
-    print("Model loaded")
 
     nparams = sum([p.numel() for p in model.parameters()])
     print('num params', nparams)
@@ -316,24 +347,30 @@ if __name__ == '__main__':
     )
     sampler = None
 
-    device = torch.device('cuda', args.local_rank)
+    if args.distributed_data_parallel:
+        rank, world_size, local_rank, local_size = get_mpi_info()
+    else:
+        world_size = 1
+        local_rank = 0
+        rank = 0
+
+    # We do not use local_rank since we are now using -r6 -a1 -g1 -c7 on summit
+    gpunum = 0 
+
+    device = torch.device('cuda', gpunum)
     model = model.to(device)
 
-    rank = 0
     if args.single_node_data_parallel:
         model = nn.DataParallel(model)
     elif args.distributed_data_parallel:
-        # get rank from MPI
         dist.init_process_group('nccl')
 
-        rank = dist.get_rank()
-
-        args.learning_rate *= dist.get_world_size()
+        args.learning_rate *= world_size
 
         model = DDP(
             model,
-            device_ids=[args.local_rank],
-            output_device=args.local_rank,
+            device_ids=[gpunum],
+            output_device=gpunum,
         )
 
     try:

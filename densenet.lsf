@@ -1,19 +1,17 @@
-#!/bin/bash
-
 #BSUB -P CSC378
 #BSUB -J mimiccxr_densenet
 #BSUB -o output/job%J.o
 #BSUB -e output/job%J.e
-#BSUB -alloc_flags "gpumps"
+#BSUB -csm n
 
-#BSUB -q batch
+#BSUB -q killable
 #BSUB -rn
 
-#BSUB -W 2:00
-#BSUB -nnodes 1
+#BSUB -W 0:20
+#BSUB -nnodes 4
 
 # ATTENTION: PLEASE SET THIS TO MATCH THE VALUE OF -nnodes ABOVE
-NNODES=1
+NNODES=4
 
 module load ibm-wml-ce/1.7.0-2
 conda activate powerai170
@@ -31,7 +29,7 @@ mkdir -p $TORCH_HOME
 
 SEED=0
 FOLD=0
-JOBDIR=output/job$(date +%y%m%d%H%M).${LSB_JOBID}
+JOBDIR=output/job${LSB_JOBID}
 FOLDDIR=$JOBDIR/seed${SEED}/fold${FOLD}
 mkdir -p $FOLDDIR
 
@@ -39,13 +37,20 @@ BS=50
 SZ=256
 LR=1e-2
 
+# set master for torch.distributed
+export MASTER_ADDR=$(getent hosts $(echo $LSB_MCPU_HOSTS | awk '{print $3}') | awk '{print $1}')
+export MASTER_PORT=29500
+
 echo "n${NNODES} lr${LR} ${SZ}^2 bs${BS}" > $JOBDIR/description
 
-jsrun -n${NNODES} -r1 -a1 -g6 -c42 \
-    -E OMP_NUM_THREADS=1 \
+jsrun \
+    -n$((NNODES*6)) -r6 -a1 -g1 -c7 \
+    --bind=proportional-packed:7 --launch_distribution=packed \
+    -E MASTER_ADDR \
+    -E MASTER_PORT \
     -E TORCH_HOME \
-    $(which python) -m torch.distributed.launch --nproc_per_node=6 \
-      train_densenet.py \
+    ./mpienv.sh \
+      $(which python) train_densenet.py \
         --outputdir $FOLDDIR \
         --learning-rate $LR \
         --hide-progress \

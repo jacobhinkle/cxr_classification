@@ -1,0 +1,6 @@
+#!/bin/sh
+
+export RANK=$OMPI_COMM_WORLD_RANK
+export WORLD_SIZE=$OMPI_COMM_WORLD_SIZE
+
+$*
