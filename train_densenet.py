@@ -104,7 +104,8 @@ class Trainer:
             sampler=DistributedSampler(test_data) if distributed else None,
         ) if test_data is not None else None
 
-        print(f"Rank {self.rank} dl sizes:"
+        if self.reporter:
+            print(f"Number of minibatches in each split:"
                 f" train {len(self.train_loader)}"
                 f" val {len(self.val_loader)}"
                 f" test {len(self.test_loader)}")
@@ -115,7 +116,7 @@ class Trainer:
             self.iter_meter = CSVMeter(os.path.join(self.output_dir, 'iter_metrics.csv'))
 
         self.criterion = nn.BCEWithLogitsLoss(reduction='none')
-        self.optim = optim.SGD(self.model.parameters(), lr=lr)
+        self.optim = optim.Adam(self.model.parameters(), lr=lr)
 
         self.total_iters = 0
 
@@ -271,19 +272,6 @@ class Trainer:
         return metrics
 
 
-def get_mpi_info():
-    """
-    Return node-local and global MPI ranks and sizes.
-
-    This is essentially how horovod finds local rank, although they do so with
-    the C interface to MPI.
-    """
-    from mpi4py import MPI
-    comm = MPI.COMM_WORLD
-    local_comm = comm.Split_type(MPI.COMM_TYPE_SHARED)
-    return comm.Get_rank(), comm.Get_size(), local_comm.Get_rank(), local_comm.Get_size()
-
-
 if __name__ == '__main__':
     #model = tvresnet.resnet18(pretrained=True)
     import argparse
@@ -335,7 +323,6 @@ if __name__ == '__main__':
     )
 
     nparams = sum([p.numel() for p in model.parameters()])
-    print('num params', nparams)
 
     if args.single_node_data_parallel and args.distributed_data_parallel:
         raise Exception("Max one of distributed or single-node data parallel can be requested.")
@@ -348,7 +335,9 @@ if __name__ == '__main__':
     sampler = None
 
     if args.distributed_data_parallel:
-        rank, world_size, local_rank, local_size = get_mpi_info()
+        rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
+        world_size = int(os.environ['OMPI_COMM_WORLD_SIZE'])
+        local_rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
     else:
         world_size = 1
         local_rank = 0

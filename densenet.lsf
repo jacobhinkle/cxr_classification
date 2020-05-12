@@ -10,8 +10,9 @@
 #BSUB -W 0:20
 #BSUB -nnodes 4
 
-# ATTENTION: PLEASE SET THIS TO MATCH THE VALUE OF -nnodes ABOVE
-NNODES=4
+# determine number of compute nodes and their hostnames
+COMPUTE_NODES=$(cat $LSB_DJOB_HOSTFILE | sort -u | grep -v batch | grep -v login)
+NNODES=$(echo "$COMPUTE_NODES" | wc -l)
 
 module load ibm-wml-ce/1.7.0-2
 conda activate powerai170
@@ -33,13 +34,22 @@ JOBDIR=output/job${LSB_JOBID}
 FOLDDIR=$JOBDIR/seed${SEED}/fold${FOLD}
 mkdir -p $FOLDDIR
 
+# Batch sizes that fit on various image sizes for densenet121:
+#   256:  50  # JH 2020-05-11
+#   512:  20  # JH 2020-05-11
+#   1024: 6   # JH 2020-05-11
+#   2048: 1   # JH 2020-05-11
 BS=50
 SZ=256
-LR=1e-2
+# LR should be in terms of batch size
+LR=$(python -c "print($BS * 1e-6)")
 
 # set master for torch.distributed
-export MASTER_ADDR=$(getent hosts $(echo $LSB_MCPU_HOSTS | awk '{print $3}') | awk '{print $1}')
-export MASTER_PORT=29500
+# See Junqi's example here:
+# https://code.ornl.gov/olcf-analytics/summit/distributed-deep-learning-examples/-/blob/master/examples/pytorch/pytorch_synthetic_benchmark.py#L49
+# 
+export MASTER_ADDR=$(echo "$COMPUTE_NODES" | head -1)
+export MASTER_PORT=23456
 
 echo "n${NNODES} lr${LR} ${SZ}^2 bs${BS}" > $JOBDIR/description
 
