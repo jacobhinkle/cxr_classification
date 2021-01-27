@@ -18,14 +18,39 @@ from torchvision.models import densenet
 from datetime import datetime
 import os
 
-def densenet121(
+from contextlib import contextmanager
+@contextmanager
+def nvtxblock(desc):
+    try:
+        torch.cuda.nvtx.range_push(desc)
+        yield
+    finally:
+        torch.cuda.nvtx.range_pop()
+
+def cxr_densenet(
+        arch='densenet121',
         pretrained=False,
         num_classes=len(mimic_cxr_jpg.chexpert_labels),
     ):
-    mod = densenet.densenet121(pretrained=pretrained, num_classes=num_classes)
+    if arch == 'densenet121':
+        c = densenet.densenet121
+        num_init_features = 64
+    elif arch == 'densenet161':
+        c = densenet.densenet161
+        num_init_features = 96
+    elif arch == 'densenet169':
+        c = densenet.densenet169
+        num_init_features = 64
+    elif arch == 'densenet201':
+        c = densenet.densenet201
+        num_init_features = 64
+    else:
+        raise ValueError('arch must be one of: densenet121, densenet161, densenet169, densenet201')
+
+    mod = c(pretrained=pretrained, num_classes=num_classes)
     # modify first conv to take proper input_channels
     oldconv = mod.features.conv0
-    newconv = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
     newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
     mod.features._modules['conv0'] = newconv
     return mod
@@ -129,7 +154,8 @@ class Trainer:
             self.iter_meter = CSVMeter(os.path.join(self.output_dir, 'iter_metrics.csv'))
 
         self.criterion = nn.BCEWithLogitsLoss(reduction='none')
-        self.optim = optim.Adam(self.model.parameters(), lr=lr)
+        #self.optim = optim.Adam(self.model.parameters(), lr=lr)
+        self.optim = optim.SGD(self.model.parameters(), lr=lr)
 
         self.total_iters = 0
 
@@ -138,9 +164,11 @@ class Trainer:
         if self.progress and self.reporter:
             self.epbar = tqdm(self.epbar, desc='epoch', position=2)
         for self._epoch in self.epbar:
-            eploss = self.epoch()
+            with nvtxblock("Train Epoch"):
+                eploss = self.epoch()
             if self.val_iters is None:
-                valmetrics = self.validate()
+                with nvtxblock("Val Epoch"):
+                    valmetrics = self.validate()
                 if self.reporter:
                     self.val_meter.update(**valmetrics)
             else:
@@ -161,7 +189,8 @@ class Trainer:
             self.itbar = tqdm(self.itbar, desc='iter', position=1, leave=False)
         eploss = 0
         for self._iter, batch in enumerate(self.itbar):
-            itloss = self.iteration(*batch)
+            with nvtxblock("Train Iteration"):
+                itloss = self.iteration(*batch)
             if itloss is None:
                 continue
             if self.reporter:
@@ -202,7 +231,8 @@ class Trainer:
     def iteration(self, *batch):
         self.optim.zero_grad()
 
-        outputs = self.batch_forward(*batch)
+        with nvtxblock("Forward"):
+            outputs = self.batch_forward(*batch)
         if outputs is None:
             return
         _, _, loss, _, _, _ = outputs
@@ -210,14 +240,17 @@ class Trainer:
         if self.progress and self.reporter:
             self.itbar.set_postfix(loss=loss.item())
 
-        loss.backward()
+        with nvtxblock("Backward"):
+            loss.backward()
 
-        self.optim.step()
+        with nvtxblock("Optim Step"):
+            self.optim.step()
 
         self.total_iters += 1
 
         if self.val_iters is not None and self.total_iters % self.val_iters == 0:
-            valmetrics = self.validate()
+            with nvtxblock("Val"):
+                valmetrics = self.validate()
             if self.reporter:
                 self.val_meter.update(**valmetrics)
 
@@ -295,6 +328,8 @@ if __name__ == '__main__':
             help='Where to write outputs (trained weights, CSV of metrics)')
     parser.add_argument('--image-subdir', default='files',
             help='Subdirectory of datadir holding JPG files.')
+    parser.add_argument('--arch', default='densenet121',
+            help='Densenet architecture.')
     parser.add_argument('--epochs', default=100, type=int,
             help='Number of epochs to train for.')
     parser.add_argument('--val-iters', default=None, type=int,
@@ -329,7 +364,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False
     np.random.seed(0)
 
-    model = densenet121(pretrained=False)
+    model = cxr_densenet(args.arch, pretrained=False)
 
     nparams = sum([p.numel() for p in model.parameters()])
 
@@ -353,7 +388,7 @@ if __name__ == '__main__':
         rank = 0
 
     # We do not use local_rank since we are now using -r6 -a1 -g1 -c7 on summit
-    gpunum = 0 
+    gpunum = local_rank 
 
     device = torch.device('cuda', gpunum)
     model = model.to(device)
