@@ -1,3 +1,0 @@
-[submodule "affine_augmentation"]
-	path = affine_augmentation
-	url = git@code-int.ornl.gov:4jh/affine_augmentation.git

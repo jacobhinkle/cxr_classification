@@ -12,10 +12,23 @@ from tqdm import tqdm
 import mimic_cxr_jpg
 from torch_nlp_models.meters import CSVMeter
 
-from affine_augmentation import densenet
+from torchvision.models import densenet
+#from affine_augmentation import densenet
 
 from datetime import datetime
 import os
+
+def densenet121(
+        pretrained=False,
+        num_classes=len(mimic_cxr_jpg.chexpert_labels),
+    ):
+    mod = densenet.densenet121(pretrained=pretrained, num_classes=num_classes)
+    # modify first conv to take proper input_channels
+    oldconv = mod.features.conv0
+    newconv = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
+    mod.features._modules['conv0'] = newconv
+    return mod
 
 def all_gather_vectors(tensors, *, device='cuda'):
     """
@@ -167,7 +180,7 @@ class Trainer:
             with torch.no_grad():
                 weightsync_hdl = dist.all_reduce(weightsum, async_op=True)
 
-        X = X.type(torch.float32).to(device)
+        X = X.type(torch.float32).to(device).contiguous()
         Y = Y.type(torch.float32).to(device)
 
         preds = self.model(X)
@@ -316,11 +329,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False
     np.random.seed(0)
 
-    model = densenet.densenet121(
-        pretrained=False,
-        input_channels=1,
-        num_classes=len(mimic_cxr_jpg.chexpert_labels),
-    )
+    model = densenet121(pretrained=False)
 
     nparams = sum([p.numel() for p in model.parameters()])
 
