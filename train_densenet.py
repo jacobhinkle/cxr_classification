@@ -154,8 +154,8 @@ class Trainer:
             self.iter_meter = CSVMeter(os.path.join(self.output_dir, 'iter_metrics.csv'))
 
         self.criterion = nn.BCEWithLogitsLoss(reduction='none')
-        #self.optim = optim.Adam(self.model.parameters(), lr=lr)
-        self.optim = optim.SGD(self.model.parameters(), lr=lr)
+        self.optim = optim.Adam(self.model.parameters(), betas=(0.9,0.999), lr=lr)
+        #self.optim = optim.SGD(self.model.parameters(), momentum=0.9, nesterov=True, lr=lr)
 
         self.total_iters = 0
 

@@ -7,7 +7,9 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 import torch
+import torchvision
 import torch.nn.functional as F
+from torchvision import transforms
 from torch.utils.data import Dataset
 
 topdir = Path('/gpfs/alpine/proj-shared/csc378/data/MIMIC-CXR-JPG')
@@ -104,7 +106,7 @@ class MIMICCXRJPGDataset(Dataset):
         labels=chexpert_labels,
         datadir=None,
         downscale_factor=None,
-        transform=None,
+        transform=transforms.Compose([transforms.RandomHorizontalFlip(p=0.5),transforms.RandomRotation(degrees=[-20,20])]),
         image_subdir='files',
         label_method='ignore_uncertain',
         ):
