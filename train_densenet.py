@@ -99,6 +99,7 @@ class Trainer:
         val_data=None,
         test_data=None,
         distributed=False,
+        amp=False,
         lr=1e-3,
         device='cuda',
         progress = False,
@@ -109,6 +110,7 @@ class Trainer:
         self.device = device
         self.val_iters = val_iters
         self.output_dir = output_dir
+        self.amp = amp
         self.distributed = distributed
         self.progress = progress
         self.reporter = reporter
@@ -232,7 +234,12 @@ class Trainer:
         self.optim.zero_grad()
 
         with nvtxblock("Forward"):
-            outputs = self.batch_forward(*batch)
+            if self.amp:
+                from torch.cuda.amp import autocast
+                with autocast():
+                    outputs = self.batch_forward(*batch)
+            else:
+                outputs = self.batch_forward(*batch)
         if outputs is None:
             return
         _, _, loss, _, _, _ = outputs
@@ -338,6 +345,8 @@ if __name__ == '__main__':
             help='Batch size for SGD.')
     parser.add_argument('--learning-rate', default=1e-3, type=float,
             help='Learning rate for SGD.')
+    parser.add_argument('--amp', action='store_true',
+            help='Use automatic mixed precision (AMP).')
     parser.add_argument('--hide-progress', action='store_true',
             help='Do not display progress bar.')
     parser.add_argument('--single-node-data-parallel', action='store_true',
@@ -416,6 +425,7 @@ if __name__ == '__main__':
             progress=not args.hide_progress,
             reporter=rank == 0,
             device=device,
+            amp=args.amp,
             distributed=args.distributed_data_parallel,
         )
 
