@@ -47,12 +47,13 @@ def cxr_densenet(
     else:
         raise ValueError('arch must be one of: densenet121, densenet161, densenet169, densenet201')
 
-    mod = c(pretrained=pretrained, num_classes=num_classes)
+    mod = c(pretrained=pretrained, num_classes=1000)
     # modify first conv to take proper input_channels
     oldconv = mod.features.conv0
     newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
     newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
     mod.features._modules['conv0'] = newconv
+    mod.classifier = nn.Linear(mod.classifier.in_features, num_classes)
     return mod
 
 def all_gather_vectors(tensors, *, device='cuda'):
@@ -326,7 +327,6 @@ class Trainer:
 
 
 if __name__ == '__main__':
-    #model = tvresnet.resnet18(pretrained=True)
     import argparse
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--datadir', '-d', default=mimic_cxr_jpg.topdir,
@@ -337,6 +337,8 @@ if __name__ == '__main__':
             help='Subdirectory of datadir holding JPG files.')
     parser.add_argument('--arch', default='densenet121',
             help='Densenet architecture.')
+    parser.add_argument('--from-scratch', action='store_true',
+            help='Do not initialize with ImageNet pretrained weights.')
     parser.add_argument('--epochs', default=100, type=int,
             help='Number of epochs to train for.')
     parser.add_argument('--val-iters', default=None, type=int,
@@ -373,7 +375,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False
     np.random.seed(0)
 
-    model = cxr_densenet(args.arch, pretrained=False)
+    model = cxr_densenet(args.arch, pretrained=not args.from_scratch)
 
     nparams = sum([p.numel() for p in model.parameters()])
 
