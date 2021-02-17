@@ -9,6 +9,7 @@ from PIL import Image
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+from torchvision import transforms
 
 topdir = Path('/gpfs/alpine/proj-shared/csc378/data/MIMIC-CXR-JPG')
 chexpert_labels = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema',
@@ -16,6 +17,8 @@ chexpert_labels = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema',
     'Lung Opacity', 'No Finding', 'Pleural Effusion', 'Pleural Other',
     'Pneumonia', 'Pneumothorax', 'Support Devices']
 
+normalize = transforms.Normalize(mean=[0.449], #[0.485, 0.456, 0.406],
+                                 std=[0.226]) #[0.229, 0.224, 0.225]),
 
 class MIMICCXRJPGDataset(Dataset):
     """
@@ -198,8 +201,6 @@ class MIMICCXRJPGDataset(Dataset):
         if self.transform is not None:
             im = self.transform(im)
 
-        im = torch.as_tensor(np.array(im)).unsqueeze(0)
-
         if self.downscale_factor is not None:
             im = F.avg_pool2d(im.type(torch.float32), self.downscale_factor)
 
@@ -208,7 +209,19 @@ class MIMICCXRJPGDataset(Dataset):
         return im, labels, labelmask
 
 
-def official_split(datadir=topdir, **kwargs):
+def official_split(
+        datadir=topdir,
+        train_transform=transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(15),
+            transforms.ToTensor(),
+            normalize,
+            ]),
+        test_transform=transforms.Compose([
+            transforms.ToTensor(),
+            normalize,
+            ]),
+        **kwargs):
     """
     The MIMIC-CXR-JPG dataset comes with an official train-val-test split, which
     this function implements.
@@ -224,16 +237,27 @@ def official_split(datadir=topdir, **kwargs):
     )
 
     train = MIMICCXRJPGDataset(allrecords.query('split == "train"'),
-            datadir=datadir, **kwargs)
+            datadir=datadir, transform=train_transform, **kwargs)
     val = MIMICCXRJPGDataset(allrecords.query('split == "validate"'),
-            datadir=datadir, **kwargs)
+            datadir=datadir, transform=test_transform, **kwargs)
     test = MIMICCXRJPGDataset(allrecords.query('split == "test"'),
-        datadir=datadir, **kwargs)
+        datadir=datadir, transform=test_transform, **kwargs)
 
     return train, val, test
 
 
-def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False, **kwargs):
+def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False, 
+        train_transform=transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(15),
+            transforms.ToTensor(),
+            normalize,
+            ]),
+        test_transform=transforms.Compose([
+            transforms.ToTensor(),
+            normalize,
+            ]),
+        **kwargs):
     """
     Cross-validation with splitting at subject level.
     """
@@ -269,9 +293,9 @@ def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False, **kwargs):
     valrecords = subjrecs(val_subj)
     testrecords = subjrecs(test_subj)
 
-    train = MIMICCXRJPGDataset(trainrecords, **kwargs)
-    val = MIMICCXRJPGDataset(valrecords, **kwargs)
-    test = MIMICCXRJPGDataset(testrecords, **kwargs)
+    train = MIMICCXRJPGDataset(trainrecords, transform=train_transform, **kwargs)
+    val = MIMICCXRJPGDataset(valrecords, transform=test_transform, **kwargs)
+    test = MIMICCXRJPGDataset(testrecords, transform=test_transform, **kwargs)
 
     return train, val, test
 
