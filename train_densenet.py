@@ -157,13 +157,14 @@ class Trainer:
             self.iter_meter = CSVMeter(os.path.join(self.output_dir, 'iter_metrics.csv'))
 
         self.criterion = nn.BCEWithLogitsLoss(reduction='none')
-        self.optim = optim.Adam(self.model.parameters(), betas=(0.9,0.999), lr=lr)
+        self.optim = optim.Adam(self.model.parameters(), lr=lr)
         #self.optim = optim.SGD(self.model.parameters(), momentum=0.9, nesterov=True, lr=lr)
 
         self.total_iters = 0
 
     def train(self):
         self.epbar = range(self.num_epochs)
+        validation_loss = []
         if self.progress and self.reporter:
             self.epbar = tqdm(self.epbar, desc='epoch', position=2)
         for self._epoch in self.epbar:
@@ -172,6 +173,7 @@ class Trainer:
             if self.val_iters is None:
                 with nvtxblock("Val Epoch"):
                     valmetrics = self.validate()
+                    validation_loss.append(val_loss)
                 if self.reporter:
                     self.val_meter.update(**valmetrics)
             else:
@@ -182,6 +184,9 @@ class Trainer:
                 self.epoch_meter.flush()
                 self.val_meter.flush()
                 self.iter_meter.flush()
+            if size(validation_loss > 1):
+                if validation_loss[-1] > validation_loss[-2]:
+                    self.optim.lr = self.optim.lr / 2
 
     def epoch(self):
         if self.reporter and not self.progress:
@@ -308,6 +313,8 @@ class Trainer:
                             len(mimic_cxr_jpg.chexpert_labels)]
 
             metrics[split + '_loss'] = valloss/len(valbar)
+            if split == 'val':
+                val_loss =  vallos/len(valbar)
 
             for task in mimic_cxr_jpg.chexpert_labels:
                 Yp = Ypreds[task].cpu().numpy()
