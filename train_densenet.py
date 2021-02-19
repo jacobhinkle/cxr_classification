@@ -112,6 +112,7 @@ class Trainer:
         self.val_iters = val_iters
         self.output_dir = output_dir
         self.amp = amp
+        self.lr = lr
         self.distributed = distributed
         self.progress = progress
         self.reporter = reporter
@@ -157,8 +158,8 @@ class Trainer:
             self.iter_meter = CSVMeter(os.path.join(self.output_dir, 'iter_metrics.csv'))
 
         self.criterion = nn.BCEWithLogitsLoss(reduction='none')
-        self.optim = optim.Adam(self.model.parameters(), lr=lr)
-        #self.optim = optim.SGD(self.model.parameters(), momentum=0.9, nesterov=True, lr=lr)
+        self.optim = optim.Adam(self.model.parameters(), lr=self.lr)
+        #self.optim = optim.SGD(self.model.parameters(), lr=self.lr)
 
         self.total_iters = 0
 
@@ -180,7 +181,7 @@ class Trainer:
             validation_loss.append(self.valLoss)
             if len(validation_loss) > 1:
                 if validation_loss[-1] > validation_loss[-2]:
-                    self.optim.lr = self.optim.lr / 2
+                    self.lr = self.lr / 2
             if self.reporter:
                 self.epoch_meter.update(train_loss=eploss, **valmetrics)
                 # flush all meters at least once per epoch
