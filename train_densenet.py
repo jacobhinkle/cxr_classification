@@ -173,20 +173,20 @@ class Trainer:
             if self.val_iters is None:
                 with nvtxblock("Val Epoch"):
                     valmetrics = self.validate()
-                    validation_loss.append(self.val_loss)
                 if self.reporter:
                     self.val_meter.update(**valmetrics)
             else:
                 valmetrics = {}
+            validation_loss.append(self.valLoss)
+            if len(validation_loss) > 1:
+                if validation_loss[-1] > validation_loss[-2]:
+                    self.optim.lr = self.optim.lr / 2
             if self.reporter:
                 self.epoch_meter.update(train_loss=eploss, **valmetrics)
                 # flush all meters at least once per epoch
                 self.epoch_meter.flush()
                 self.val_meter.flush()
                 self.iter_meter.flush()
-            if len(validation_loss) > 1:
-                if validation_loss[-1] > validation_loss[-2]:
-                    self.optim.lr = self.optim.lr / 2
 
     def epoch(self):
         if self.reporter and not self.progress:
@@ -314,7 +314,7 @@ class Trainer:
 
             metrics[split + '_loss'] = valloss/len(valbar)
             if split == 'val':
-                self.val_loss =  valloss/len(valbar)
+                self.valLoss =  valloss/len(valbar)
 
             for task in mimic_cxr_jpg.chexpert_labels:
                 Yp = Ypreds[task].cpu().numpy()
