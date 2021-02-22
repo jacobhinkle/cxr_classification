@@ -101,7 +101,7 @@ class Trainer:
         test_data=None,
         distributed=False,
         amp=False,
-        lr=1e-3,
+        lr=0.0005,
         device='cuda',
         progress = False,
         reporter = True,
@@ -236,7 +236,7 @@ class Trainer:
         bce = self.criterion(preds, Y)
         loss = (bce * Ymask).sum() / weightsum
         return preds, bce, loss, X, Y, Ymask
-
+    
     def iteration(self, *batch):
         self.optim.zero_grad()
 
@@ -256,6 +256,9 @@ class Trainer:
 
         with nvtxblock("Backward"):
             loss.backward()
+
+        #Gradient Clipping - doesn't work
+        nn.utils.clip_grad_value_(self.model.parameters(), clip_value=0.5)
 
         with nvtxblock("Optim Step"):
             self.optim.step()
@@ -331,6 +334,7 @@ class Trainer:
         self.model.train()
         if self.reporter:
             print(f"Validation time: {datetime.now() - val_start}")
+            print(f"Learning rate: {self.lr}")
         return metrics
 
 
@@ -393,7 +397,7 @@ if __name__ == '__main__':
     train, val, test = mimic_cxr_jpg.official_split(
         datadir=args.datadir,
         image_subdir=args.image_subdir,
-        label_method=args.label_method,
+        label_method={l:'zeros_uncertain_nomask' for l in mimic_cxr_jpg.chexpert_labels},
     )
     sampler = None
 
