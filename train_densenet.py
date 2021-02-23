@@ -363,7 +363,7 @@ if __name__ == '__main__':
             help='Use automatic mixed precision (AMP).')
     parser.add_argument('--num-folds', default=10, type=int,
             help='Number of folds in cross-validation')
-    parser.add_argument('--fold', type=int,
+    parser.add_argument('--fold', required=True, type=int,
             help='Which fold of cross-validation to use in training?')
     parser.add_argument('--random-state', default=0,  type=int,
             help='Random state to use in cross-validation')
@@ -400,11 +400,8 @@ if __name__ == '__main__':
     if args.single_node_data_parallel and args.distributed_data_parallel:
         raise Exception("Max one of distributed or single-node data parallel can be requested.")
 
-    train, val, test = mimic_cxr_jpg.official_split(
-        datadir=args.datadir,
-        image_subdir=args.image_subdir,
-        label_method={l:'zeros_uncertain_nomask' for l in mimic_cxr_jpg.chexpert_labels},
-    )
+    train, val, test = mimic_cxr_jpg.cv(num_folds=args.num_folds, 
+            fold=args.fold, random_state=args.random_state, stratify=False)
     sampler = None
 
     if args.distributed_data_parallel:
