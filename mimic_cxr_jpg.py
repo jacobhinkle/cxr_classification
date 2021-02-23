@@ -284,7 +284,7 @@ def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False,
         for k, (trainval_ix, test_ix) in enumerate(kf.split(uniq_subj)):
             if k != fold: continue
             trainval_subj = uniq_subj[trainval_ix]
-            test_subj = uniq_subj[trainval_ix]
+            test_subj = uniq_subj[test_ix]
             train_subj, val_subj = train_test_split(
                 trainval_subj,
                 test_size=val_size,
