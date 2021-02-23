@@ -263,9 +263,11 @@ def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False,
     """
     Cross-validation with splitting at subject level.
     """
+    datadir = Path(topdir)
+
     allrecords = pd.merge(
-        pd.read_csv(topdir / 'splitpaths.csv.gz'),
-        pd.read_csv(topdir / 'mimic-cxr-2.0.0-chexpert.csv.gz'),
+        pd.read_csv(datadir / 'splitpaths.csv.gz'),
+        pd.read_csv(datadir / 'mimic-cxr-2.0.0-chexpert.csv.gz'),
         on=['subject_id', 'study_id'],
     )
 
