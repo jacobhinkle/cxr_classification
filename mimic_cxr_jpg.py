@@ -13,7 +13,7 @@ from torchvision import transforms
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-topdir = Path('/gpfs/alpine/proj-shared/csc378/data/MIMIC-CXR-JPG')
+topdir = Path('/mnt/DGX01/Personal/4jh/cxr/MIMIC-CXR-JPG')
 chexpert_labels = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema',
     'Enlarged Cardiomediastinum', 'Fracture', 'Lung Lesion',
     'Lung Opacity', 'No Finding', 'Pleural Effusion', 'Pleural Other',
