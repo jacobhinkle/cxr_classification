@@ -400,8 +400,11 @@ if __name__ == '__main__':
     if args.single_node_data_parallel and args.distributed_data_parallel:
         raise Exception("Max one of distributed or single-node data parallel can be requested.")
 
-    train, val, test = mimic_cxr_jpg.cv(num_folds=args.num_folds, 
-            fold=args.fold, random_state=args.random_state, stratify=False)
+    train, val, test = mimic_cxr_jpg.cv(image_subdir=args.image_subdir,
+            num_folds=args.num_folds, 
+            fold=args.fold, 
+            random_state=args.random_state, 
+            stratify=False)
     sampler = None
 
     if args.distributed_data_parallel:
