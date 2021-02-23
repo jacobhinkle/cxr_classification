@@ -361,6 +361,12 @@ if __name__ == '__main__':
             help='Learning rate for SGD.')
     parser.add_argument('--amp', action='store_true',
             help='Use automatic mixed precision (AMP).')
+    parser.add_argument('--num-folds', default=10, type=int,
+            help='Number of folds in cross-validation')
+    parser.add_argument('--fold', type=int,
+            help='Which fold of cross-validation to use in training?')
+    parser.add_argument('--random-state', default=0,  type=int,
+            help='Random state to use in cross-validation')
     parser.add_argument('--hide-progress', action='store_true',
             help='Do not display progress bar.')
     parser.add_argument('--single-node-data-parallel', action='store_true',
