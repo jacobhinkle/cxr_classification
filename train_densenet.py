@@ -179,9 +179,14 @@ class Trainer:
             else:
                 valmetrics = {}
             validation_loss.append(self.valLoss)
-            if len(validation_loss) > 1:
-                if validation_loss[-1] > validation_loss[-2]:
+            if len(validation_loss) >= 3:
+                if validation_loss[-1] >= validation_loss[-2] and validation_loss[-2] >= validation_loss[-3]:
                     self.lr = self.lr / 2
+            if len(validation_loss) >= 10:
+                valrev = validation_loss.copy()
+                valrev.sort()
+                if valrev[0] == validation_loss[-10] and valrev[-1] == validation_loss[-1]:
+                    break
             if self.reporter:
                 self.epoch_meter.update(train_loss=eploss, **valmetrics)
                 # flush all meters at least once per epoch
