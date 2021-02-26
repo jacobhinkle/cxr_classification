@@ -162,6 +162,7 @@ class Trainer:
         #self.optim = optim.SGD(self.model.parameters(), lr=self.lr)
 
         self.total_iters = 0
+        self.scaler = torch.cuda.amp.GradScaler()
 
     def train(self):
         self.epbar = range(self.num_epochs)
@@ -260,13 +261,20 @@ class Trainer:
             self.itbar.set_postfix(loss=loss.item())
 
         with nvtxblock("Backward"):
-            loss.backward()
+            if self.amp:
+                self.scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
         #Gradient Clipping - doesn't work
-        nn.utils.clip_grad_value_(self.model.parameters(), clip_value=0.5)
+        #nn.utils.clip_grad_value_(self.model.parameters(), clip_value=0.5)
 
         with nvtxblock("Optim Step"):
-            self.optim.step()
+            if self.amp:
+                self.scaler.step(self.optim)
+                self.scaler.update()
+            else:
+                self.optim.step()
 
         self.total_iters += 1
 
