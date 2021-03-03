@@ -322,7 +322,7 @@ class Trainer:
 
             if self.distributed:
                 with torch.no_grad():
-                    dist.all_reduce(loss)
+                    dist.all_reduce(valloss)
                 allvectors = [torch.tensor(Ypreds[t]).to(device).contiguous()
                             for t in mimic_cxr_jpg.chexpert_labels] \
                         + [torch.tensor(Yactual[t]).to(device).contiguous()
