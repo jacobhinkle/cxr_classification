@@ -299,7 +299,7 @@ class Trainer:
             valbar = loader
             if self.progress and self.reporter:
                 valbar = tqdm(valbar, desc=split, position=0, leave=False)
-            valloss = 0
+            valloss = torch.tensor(0.0, device=self.device)
             Ypreds, Yactual = {}, {}
             for task in mimic_cxr_jpg.chexpert_labels:
                 Ypreds[task], Yactual[task] = [], []
