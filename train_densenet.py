@@ -266,8 +266,10 @@ class Trainer:
             else:
                 loss.backward()
 
-        #Gradient Clipping - doesn't work
-        #nn.utils.clip_grad_value_(self.model.parameters(), clip_value=0.5)
+        if self.distributed:
+            with torch.no_grad():
+                dist.all_reduce(loss)
+
 
         with nvtxblock("Optim Step"):
             if self.amp:
@@ -319,6 +321,8 @@ class Trainer:
                 Yactual[task] = np.concatenate(Yactual[task], axis=0)
 
             if self.distributed:
+                with torch.no_grad():
+                    dist.all_reduce(loss)
                 allvectors = [torch.tensor(Ypreds[t]).to(device).contiguous()
                             for t in mimic_cxr_jpg.chexpert_labels] \
                         + [torch.tensor(Yactual[t]).to(device).contiguous()
