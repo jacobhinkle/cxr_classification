@@ -101,7 +101,7 @@ class Trainer:
         test_data=None,
         distributed=False,
         amp=False,
-        lr=0.0005,
+        lr=0.0001,
         device='cuda',
         progress = False,
         reporter = True,
@@ -332,7 +332,8 @@ class Trainer:
                     Ypreds[task] = gathered[i]
                     Yactual[task] = gathered[i +
                             len(mimic_cxr_jpg.chexpert_labels)]
-
+            
+            valloss=valloss.item()
             metrics[split + '_loss'] = valloss/len(valbar)
             if split == 'val':
                 self.valLoss =  valloss/len(valbar)
