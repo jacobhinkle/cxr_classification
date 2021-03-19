@@ -335,7 +335,8 @@ if __name__ == '__main__':
             help='Where to write outputs (trained weights, CSV of metrics)')
     parser.add_argument('--image-subdir', default='files',
             help='Subdirectory of datadir holding JPG files.')
-    parser.add_argument('--arch', default='densenet121',
+    parser.add_argument('--arch', default='densenet121', choices=['densenet121',
+        'densenet161', 'densenet169', 'densenet201', 'msd100'],
             help='Densenet architecture.')
     parser.add_argument('--from-scratch', action='store_true',
             help='Do not initialize with ImageNet pretrained weights.')
@@ -375,7 +376,12 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False
     np.random.seed(0)
 
-    model = cxr_densenet(args.arch, pretrained=not args.from_scratch)
+    if args.arch[:3] == 'msd':
+        from msd_classifier import MSDClassifier2d
+        if args.arch == 'msd100':
+            model = MSDClassifier2d(1, len(mimic_cxr_jpg.chexpert_labels), depth=100, maxdil=10, width=1)
+    else:
+        model = cxr_densenet(args.arch, pretrained=not args.from_scratch)
 
     nparams = sum([p.numel() for p in model.parameters()])
 
