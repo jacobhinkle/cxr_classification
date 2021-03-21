@@ -101,7 +101,7 @@ class Trainer:
         test_data=None,
         distributed=False,
         amp=False,
-        lr=0.0001,
+        lr=0.00004,
         device='cuda',
         progress = False,
         reporter = True,
@@ -214,6 +214,7 @@ class Trainer:
         if self.reporter and not self.progress:
             epoch_time = datetime.now() - epoch_start
             print(f"Epoch time: {epoch_time}")
+        torch.save(self.model, self.output_dir + f'/model_epoch{self._epoch}.pt')
         return eploss
 
     def batch_forward(self, X, Y, Ymask):
@@ -266,11 +267,6 @@ class Trainer:
             else:
                 loss.backward()
 
-        if self.distributed:
-            with torch.no_grad():
-                dist.all_reduce(loss)
-
-
         with nvtxblock("Optim Step"):
             if self.amp:
                 self.scaler.step(self.optim)
@@ -299,7 +295,7 @@ class Trainer:
             valbar = loader
             if self.progress and self.reporter:
                 valbar = tqdm(valbar, desc=split, position=0, leave=False)
-            valloss = torch.tensor(0.0, device=self.device)
+            valloss = 0
             Ypreds, Yactual = {}, {}
             for task in mimic_cxr_jpg.chexpert_labels:
                 Ypreds[task], Yactual[task] = [], []
@@ -321,8 +317,6 @@ class Trainer:
                 Yactual[task] = np.concatenate(Yactual[task], axis=0)
 
             if self.distributed:
-                with torch.no_grad():
-                    dist.all_reduce(valloss)
                 allvectors = [torch.tensor(Ypreds[t]).to(device).contiguous()
                             for t in mimic_cxr_jpg.chexpert_labels] \
                         + [torch.tensor(Yactual[t]).to(device).contiguous()
@@ -333,7 +327,6 @@ class Trainer:
                     Yactual[task] = gathered[i +
                             len(mimic_cxr_jpg.chexpert_labels)]
             
-            valloss=valloss.item()
             metrics[split + '_loss'] = valloss/len(valbar)
             if split == 'val':
                 self.valLoss =  valloss/len(valbar)
@@ -365,7 +358,8 @@ if __name__ == '__main__':
             help='Where to write outputs (trained weights, CSV of metrics)')
     parser.add_argument('--image-subdir', default='files',
             help='Subdirectory of datadir holding JPG files.')
-    parser.add_argument('--arch', default='densenet121',
+    parser.add_argument('--arch', default='densenet121', choices=['densenet121',
+        'densenet161', 'densenet169', 'densenet201', 'msd100'],
             help='Densenet architecture.')
     parser.add_argument('--from-scratch', action='store_true',
             help='Do not initialize with ImageNet pretrained weights.')
@@ -411,7 +405,12 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False
     np.random.seed(0)
 
-    model = cxr_densenet(args.arch, pretrained=not args.from_scratch)
+    if args.arch[:3] == 'msd':
+        from msd_classifier import MSDClassifier2d
+        if args.arch == 'msd100':
+            model = MSDClassifier2d(1, len(mimic_cxr_jpg.chexpert_labels), depth=100, maxdil=10, width=1)
+    else:
+        model = cxr_densenet(args.arch, pretrained=not args.from_scratch)
 
     nparams = sum([p.numel() for p in model.parameters()])
 
