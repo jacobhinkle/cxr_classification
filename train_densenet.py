@@ -12,6 +12,7 @@ from tqdm import tqdm
 import mimic_cxr_jpg
 from torch_nlp_models.meters import CSVMeter
 
+from torchvision.models import resnet
 from torchvision.models import densenet
 #from affine_augmentation import densenet
 
@@ -27,33 +28,53 @@ def nvtxblock(desc):
     finally:
         torch.cuda.nvtx.range_pop()
 
-def cxr_densenet(
+def cxr_net(
         arch='densenet121',
         pretrained=False,
         num_classes=len(mimic_cxr_jpg.chexpert_labels),
     ):
-    if arch == 'densenet121':
-        c = densenet.densenet121
-        num_init_features = 64
-    elif arch == 'densenet161':
-        c = densenet.densenet161
-        num_init_features = 96
-    elif arch == 'densenet169':
-        c = densenet.densenet169
-        num_init_features = 64
-    elif arch == 'densenet201':
-        c = densenet.densenet201
-        num_init_features = 64
-    else:
-        raise ValueError('arch must be one of: densenet121, densenet161, densenet169, densenet201')
+    if 'densenet' in arch:
 
-    mod = c(pretrained=pretrained, num_classes=1000)
-    # modify first conv to take proper input_channels
-    oldconv = mod.features.conv0
-    newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
-    newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
-    mod.features._modules['conv0'] = newconv
-    mod.classifier = nn.Linear(mod.classifier.in_features, num_classes)
+        if arch == 'densenet121':
+            c = densenet.densenet121
+            num_init_features = 64
+        elif arch == 'densenet161':
+            c = densenet.densenet161
+            num_init_features = 96
+        elif arch == 'densenet169':
+            c = densenet.densenet169
+            num_init_features = 64
+        elif arch == 'densenet201':
+            c = densenet.densenet201
+            num_init_features = 64
+        else:
+            raise ValueError('arch must be one of: densenet121, densenet161, densenet169, densenet201')
+
+        mod = c(pretrained=pretrained, num_classes=1000)
+        # modify first conv to take proper input_channels
+        oldconv = mod.features.conv0
+        newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
+        newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
+        mod.features._modules['conv0'] = newconv
+        mod.classifier = nn.Linear(mod.classifier.in_features, num_classes)
+    
+    elif 'resnet' in arch:
+        if arch == 'resnet50':
+            c = resnet.resnet50
+            num_init_features = 64
+        elif arch == 'resnet101':
+            c = resnet.resnet101
+            num_init_features = 64
+        else:
+            raise ValueError('arch must be one of: resnet50, resnet101')
+
+        mod = c(pretrained=pretrained, num_classes=1000)
+        # modify first conv to take proper input_channels
+        oldconv = mod.conv1
+        newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
+        newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
+        mod.conv1 = newconv
+        mod.fc = nn.Linear(512 * 4, num_classes)
     return mod
 
 def all_gather_vectors(tensors, *, device='cuda'):
@@ -101,7 +122,7 @@ class Trainer:
         test_data=None,
         distributed=False,
         amp=False,
-        lr=0.00004,
+        lr=0.0005,
         device='cuda',
         progress = False,
         reporter = True,
@@ -214,7 +235,7 @@ class Trainer:
         if self.reporter and not self.progress:
             epoch_time = datetime.now() - epoch_start
             print(f"Epoch time: {epoch_time}")
-        torch.save(self.model, self.output_dir + f'/model_epoch{self._epoch}.pt')
+        torch.save(self.model.state_dict(), self.output_dir + f'/model_epoch{self._epoch}.pt')
         return eploss
 
     def batch_forward(self, X, Y, Ymask):
@@ -359,7 +380,7 @@ if __name__ == '__main__':
     parser.add_argument('--image-subdir', default='files',
             help='Subdirectory of datadir holding JPG files.')
     parser.add_argument('--arch', default='densenet121', choices=['densenet121',
-        'densenet161', 'densenet169', 'densenet201', 'msd100'],
+        'densenet161', 'densenet169', 'densenet201', 'msd100','resnet50'],
             help='Densenet architecture.')
     parser.add_argument('--from-scratch', action='store_true',
             help='Do not initialize with ImageNet pretrained weights.')
@@ -410,7 +431,7 @@ if __name__ == '__main__':
         if args.arch == 'msd100':
             model = MSDClassifier2d(1, len(mimic_cxr_jpg.chexpert_labels), depth=100, maxdil=10, width=1)
     else:
-        model = cxr_densenet(args.arch, pretrained=not args.from_scratch)
+        model = cxr_net(args.arch, pretrained=not args.from_scratch)
 
     nparams = sum([p.numel() for p in model.parameters()])
 
