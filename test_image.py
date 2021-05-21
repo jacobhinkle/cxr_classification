@@ -8,9 +8,8 @@ from PIL import Image
 normalize = transforms.Normalize(mean=[0.449], #[0.485, 0.456, 0.406],
                                  std=[0.226]) #[0.229, 0.224, 0.225]),
 
-device = torch.device('cpu')
 model = cxr_net('densenet121', pretrained=True)
-model.load_state_dict(torch.load('/home/64f/cxr/cxr_classification/out512x512-resnet/model_epoch4.pt', map_location=device))
+model.load_state_dict(torch.load('/home/64f/cxr/cxr_classification/out256x256/model_epoch24.pt'))
 model.eval()
 
 transform = transforms.Compose([transforms.ToTensor(),normalize])
