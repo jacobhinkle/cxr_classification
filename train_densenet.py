@@ -60,7 +60,7 @@ def cxr_net(
     
     elif 'resnet' in arch:
         if arch == 'resnet50':
-            c = resnet.resnet50
+            c = resnet.resnet50(pretrained=True,replace_stride_with_dilation=[False, True, True])
             num_init_features = 64
         elif arch == 'resnet101':
             c = resnet.resnet101
@@ -68,7 +68,7 @@ def cxr_net(
         else:
             raise ValueError('arch must be one of: resnet50, resnet101')
 
-        mod = c(pretrained=pretrained, num_classes=1000)
+        mod = c
         # modify first conv to take proper input_channels
         oldconv = mod.conv1
         newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
@@ -122,7 +122,7 @@ class Trainer:
         test_data=None,
         distributed=False,
         amp=False,
-        lr=0.0005,
+        lr=0.000063,
         device='cuda',
         progress = False,
         reporter = True,
@@ -204,10 +204,8 @@ class Trainer:
             if len(validation_loss) >= 3:
                 if validation_loss[-1] >= validation_loss[-2] and validation_loss[-2] >= validation_loss[-3]:
                     self.lr = self.lr / 2
-            if len(validation_loss) >= 10:
-                valrev = validation_loss.copy()
-                valrev.sort()
-                if valrev[0] == validation_loss[-10] and valrev[-1] == validation_loss[-1]:
+            elif len(validation_loss) >= 10:
+                if validation_loss[-1] >= validation_loss[-10]:
                     break
             if self.reporter:
                 self.epoch_meter.update(train_loss=eploss, **valmetrics)
@@ -431,8 +429,7 @@ if __name__ == '__main__':
         if args.arch == 'msd100':
             model = MSDClassifier2d(1, len(mimic_cxr_jpg.chexpert_labels), depth=100, maxdil=10, width=1)
     else:
-        model = cxr_net(args.arch, pretrained=not args.from_scratch)
-
+        model = cxr_net(args.arch)
     nparams = sum([p.numel() for p in model.parameters()])
 
     if args.single_node_data_parallel and args.distributed_data_parallel:
@@ -442,7 +439,8 @@ if __name__ == '__main__':
             num_folds=args.num_folds, 
             fold=args.fold, 
             random_state=args.random_state, 
-            stratify=False)
+            stratify=False,
+            label_method={l:'zeros_uncertain_nomask' for l in mimic_cxr_jpg.chexpert_labels})
     sampler = None
 
     if args.distributed_data_parallel:
