@@ -139,7 +139,7 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load('/home/64f/cxr/cxr_classification/out256x256/model_epoch2.pt'))
     model.eval()
     
-    #model = model.features.cuda()
+    model = model.features.cuda()
     
     erf = calculate_erf(model,data)
     print(erf)
