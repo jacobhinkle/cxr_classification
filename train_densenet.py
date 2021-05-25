@@ -233,7 +233,8 @@ class Trainer:
         if self.reporter and not self.progress:
             epoch_time = datetime.now() - epoch_start
             print(f"Epoch time: {epoch_time}")
-        torch.save(self.model.state_dict(), self.output_dir + f'/model_epoch{self._epoch}.pt')
+        if self.reporter:
+	    torch.save(self.model.state_dict(), self.output_dir + f'/model_epoch{self._epoch}.pt')
         return eploss
 
     def batch_forward(self, X, Y, Ymask):
