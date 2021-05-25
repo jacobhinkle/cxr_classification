@@ -234,7 +234,7 @@ class Trainer:
             epoch_time = datetime.now() - epoch_start
             print(f"Epoch time: {epoch_time}")
         if self.reporter:
-            torch.save(self.model.model.state_dict(), self.output_dir + f'/model_epoch{self._epoch}.pt')
+            torch.save(self.model.module.state_dict(), self.output_dir + f'/model_epoch{self._epoch}.pt')
         return eploss
 
     def batch_forward(self, X, Y, Ymask):
