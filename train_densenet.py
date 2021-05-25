@@ -122,7 +122,7 @@ class Trainer:
         test_data=None,
         distributed=False,
         amp=False,
-        lr=0.000063,
+        lr=0.0005,
         device='cuda',
         progress = False,
         reporter = True,
@@ -234,7 +234,7 @@ class Trainer:
             epoch_time = datetime.now() - epoch_start
             print(f"Epoch time: {epoch_time}")
         if self.reporter:
-	    torch.save(self.model.state_dict(), self.output_dir + f'/model_epoch{self._epoch}.pt')
+            torch.save(self.model.model.state_dict(), self.output_dir + f'/model_epoch{self._epoch}.pt')
         return eploss
 
     def batch_forward(self, X, Y, Ymask):
