@@ -1,4 +1,5 @@
 import torch
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 from torchvision.models import densenet
 from torch.utils.data import DataLoader
@@ -32,8 +33,8 @@ def erf(model, X):
 def erf_stream(model, dataloader, device='cuda'):
     es = None
     n = 0
-    for X in tqdm(dataloader):
-        X = torch.stack(X).to(device)
+    for X,Y,Z in tqdm(dataloader):
+        X = X.to(device)
         e = erf(model, X).detach()
         if es is None:
             es = e
@@ -104,7 +105,7 @@ def calculate_erf(model, X):
     
     mu, sig, ht = fit_gaussian_moment(e)
         
-    return sig
+    return e,sig
 
 if __name__ == '__main__':
     import argparse
@@ -117,6 +118,9 @@ if __name__ == '__main__':
             help='Which fold of cross-validation to use in training?')
     parser.add_argument('--random-state', default=0,  type=int,
             help='Random state to use in cross-validation')
+    parser.add_argument('--batch-size', default=64, type=int,
+            help='Batch size for test data loading')
+
 
     args = parser.parse_args()
     #Get test data
@@ -127,19 +131,47 @@ if __name__ == '__main__':
 
 
     data = DataLoader(test,
-            batch_size=64,
+            batch_size=args.batch_size,
             shuffle=False,
             num_workers=8,
             pin_memory=True,
             sampler=None,
         )
-    #print(len(data))
+    
     #load model
     model = cxr_net('densenet121', pretrained=True)
-    model.load_state_dict(torch.load('/home/64f/cxr/cxr_classification/out256x256/model_epoch2.pt'))
+    model.load_state_dict(torch.load('/home/64f/cxr/cxr_classification/out256x256/model_epoch18.pt'))
     model.eval()
-    
     model = model.features.cuda()
+
+    #imagenet pretrained model
+    model_pretrained = cxr_net('densenet121', pretrained=True)    
+    model_pretrained = model_pretrained.features.cuda()
     
-    erf = calculate_erf(model,data)
-    print(erf)
+    #untrained model
+    model_untrained = cxr_net('densenet121', pretrained=False)
+    model_untrained = model_untrained.features.cuda()
+    
+    e, sig = calculate_erf(model,data)
+    #e, sig_pretrained = calculate_erf(model_pretrained,data)
+    #e, sig_untrained = calculate_erf(model_untrained,data)
+    print('ERF for trained model:', sig)
+    #print('ERF for pretrained model:', sig_pretrained)
+    #print('ERF for untrained model:', sig_untrained)
+
+    #plot the ERF - only for trained model 
+    mu, _, ht = fit_gaussian_moment(e)
+    print(mu,ht)
+    with torch.no_grad():
+        emin = e.min()
+        emax = e.max()
+        #print(emax,e,emin)
+        if e.shape[0] == 3:
+            plt.imshow(((e - emin) / (emax - emin)).cpu().transpose(0, 2))
+        else:
+            plt.imshow(((e - emin) / (emax - emin)).cpu().squeeze(0)) 
+        #c = mpl.patches.Circle(mu, sig, color='r', lw=1, fill=False)
+        c = mpl.patches.Ellipse(mu, 2*ht, 2*sig, edgecolor='r', lw=1, facecolor="none")
+        plt.gca().add_artist(c)
+        plt.savefig('ERF-256.jpg',dpi=300)
+   
