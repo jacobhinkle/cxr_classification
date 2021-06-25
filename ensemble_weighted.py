@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch import dstack
-import torch.nn as nn
+from torch import nn, optim
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from tqdm import tqdm
@@ -106,16 +106,31 @@ if __name__ == '__main__':
 
     learning_rate = 1e1
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate)
 
-    for epoch in tqdm(range(100), desc='epoch'):
-        print("Current weights", torch.softmax(model.weight_l, dim=-1))
-        itbar = tqdm(enumerate(dataloader), desc='iter')
-        for i, batch in itbar:
+    # decay learning rate exponentially
+    # Half lifes of common choices for the rate, gamma, in epochs:
+    #   0.9     7
+    #   0.99    69
+    #   0.999   693
+    #   0.9999  6932
+    lr_sched = optim.lr_scheduler.ExponentialLR(optimizer, 0.9)
+
+    epbar = tqdm(range(100), desc='epoch')
+    for epoch in epbar:
+        # uncomment to monitor weights during training
+        #print("Current weights", torch.softmax(model.weight_l, dim=-1))
+        eploss = 0.
+        for i, batch in enumerate(dataloader):
             labels = batch[-1]
             optimizer.zero_grad()
             outputs = model(*batch[:-1])
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            itbar.set_postfix(loss=loss.item())
+            eploss += loss.item()
+        lr_sched.step()
+        epbar.set_postfix(loss=eploss / len(dataloader))
+
+    # save the weights as a numpy array
+    np.save('stacking_weights.npy', torch.softmax(model.weight_l, dim=-1).detach().cpu().numpy())
