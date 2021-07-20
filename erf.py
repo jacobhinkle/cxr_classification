@@ -1,4 +1,13 @@
+import os
+from pathlib import Path
+
 import torch
+import numpy as np
+import pandas as pd
+from PIL import Image
+import torch.nn.functional as F
+from torch.utils.data import Dataset
+from torchvision import transforms
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from torchvision.models import densenet
@@ -107,6 +116,67 @@ def calculate_erf(model, X):
         
     return e,sig
 
+normalize = transforms.Normalize(mean=[0.449], #[0.485, 0.456, 0.406],
+                                 std=[0.226]) #[0.229, 0.224, 0.225]),
+
+topdir = Path('/mnt/DGX01/Personal/4jh/cxr/MIMIC-CXR-JPG')
+chexpert_labels = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema',
+    'Enlarged Cardiomediastinum', 'Fracture', 'Lung Lesion',
+    'Lung Opacity', 'No Finding', 'Pleural Effusion', 'Pleural Other',
+    'Pneumonia', 'Pneumothorax', 'Support Devices']
+
+def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False, 
+        train_transform=transforms.Compose([
+            transforms.RandomAffine(degrees = 0, translate = (0.4, 0.4)),
+            transforms.ToTensor(),
+            normalize,
+            ]),
+        test_transform=transforms.Compose([
+            transforms.ToTensor(),
+            normalize,
+            ]),
+        **kwargs):
+    """
+    Cross-validation with splitting at subject level.
+    """
+    allrecords = pd.merge(
+        pd.read_csv(topdir / 'splitpaths.csv.gz'),
+        pd.read_csv(topdir / 'mimic-cxr-2.0.0-chexpert.csv.gz'),
+        on=['subject_id', 'study_id'],
+    )
+
+    if stratify:
+        # convert to binary labels
+        allrecords_binary = allrecords.copy()
+        allrecords_binary[chexpert_labels] = (allrecords_binary[chexpert_labels] == 1).astype(int)
+        # combine by collecting findings from all studies for each subject
+        subject_findings = (allrecords_binary[['subject_id'] + chexpert_labels].groupby('subject_id')).max()
+    else:
+        from sklearn.model_selection import KFold, train_test_split
+        kf = KFold(num_folds)#, random_state=random_state, shuffle=True)
+        uniq_subj = allrecords['subject_id'].unique()
+        for k, (trainval_ix, test_ix) in enumerate(kf.split(uniq_subj)):
+            if k != fold: continue
+            trainval_subj = uniq_subj[trainval_ix]
+            test_subj = uniq_subj[trainval_ix]
+            train_subj, val_subj = train_test_split(
+                trainval_subj,
+                test_size=val_size,
+                random_state=random_state,
+                shuffle=False,
+            )
+
+    subjrecs = lambda s: pd.DataFrame({'subject_id': s}).merge(allrecords, how='left', on='subject_id')
+    trainrecords = subjrecs(train_subj)
+    valrecords = subjrecs(val_subj)
+    testrecords = subjrecs(test_subj)
+
+    train = mimic_cxr_jpg.MIMICCXRJPGDataset(trainrecords, transform=train_transform, **kwargs)
+    val = mimic_cxr_jpg.MIMICCXRJPGDataset(valrecords, transform=test_transform, **kwargs)
+    test = mimic_cxr_jpg.MIMICCXRJPGDataset(testrecords, transform=test_transform, **kwargs)
+
+    return train, val, test
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -124,13 +194,13 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     #Get test data
-    train, val, test = mimic_cxr_jpg.cv(image_subdir=args.image_subdir, num_folds=args.num_folds, fold=args.fold, 
+    train, val, test = cv(image_subdir=args.image_subdir, num_folds=args.num_folds, fold=args.fold, 
             random_state=args.random_state, 
             stratify=False,
             label_method={l:'zeros_uncertain_nomask' for l in mimic_cxr_jpg.chexpert_labels})
 
 
-    data = DataLoader(test,
+    data = DataLoader(val,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=8,
@@ -140,7 +210,7 @@ if __name__ == '__main__':
     
     #load model
     model = cxr_net('densenet121', pretrained=True)
-    model.load_state_dict(torch.load('/home/64f/cxr/cxr_classification/out256x256/model_epoch18.pt'))
+    model.load_state_dict(torch.load('/home/64f/cxr/cxr_classification/saved_models/256/model_epoch13.pt'))
     model.eval()
     model = model.features.cuda()
 
@@ -152,12 +222,12 @@ if __name__ == '__main__':
     model_untrained = cxr_net('densenet121', pretrained=False)
     model_untrained = model_untrained.features.cuda()
     
-    e, sig = calculate_erf(model,data)
+    #e, sig = calculate_erf(model,data)
     #e, sig_pretrained = calculate_erf(model_pretrained,data)
-    #e, sig_untrained = calculate_erf(model_untrained,data)
-    print('ERF for trained model:', sig)
+    e, sig_untrained = calculate_erf(model_untrained,data)
+    #print('ERF for trained model:', sig)
     #print('ERF for pretrained model:', sig_pretrained)
-    #print('ERF for untrained model:', sig_untrained)
+    print('ERF for untrained model:', sig_untrained)
 
     #plot the ERF - only for trained model 
     mu, _, ht = fit_gaussian_moment(e)
@@ -170,8 +240,8 @@ if __name__ == '__main__':
             plt.imshow(((e - emin) / (emax - emin)).cpu().transpose(0, 2))
         else:
             plt.imshow(((e - emin) / (emax - emin)).cpu().squeeze(0)) 
-        #c = mpl.patches.Circle(mu, sig, color='r', lw=1, fill=False)
-        c = mpl.patches.Ellipse(mu, 2*ht, 2*sig, edgecolor='r', lw=1, facecolor="none")
-        plt.gca().add_artist(c)
-        plt.savefig('ERF-256.jpg',dpi=300)
+        #c = mpl.patches.Circle(mu, sig/2, color='r', lw=1, fill=False)
+        #c = mpl.patches.Ellipse(mu, 2*ht, 2*sig, edgecolor='r', lw=1, facecolor="none")
+        #plt.gca().add_artist(c)
+        plt.savefig('ERF-256-untrained.jpg',dpi=300)
    
