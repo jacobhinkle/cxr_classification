@@ -7,11 +7,13 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 import torch
+import torchvision
 import torch.nn.functional as F
+from torchvision import transforms
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-topdir = Path('/gpfs/alpine/proj-shared/csc378/data/MIMIC-CXR-JPG')
+topdir = Path('/mnt/DGX01/Personal/4jh/cxr/MIMIC-CXR-JPG')
 chexpert_labels = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema',
     'Enlarged Cardiomediastinum', 'Fracture', 'Lung Lesion',
     'Lung Opacity', 'No Finding', 'Pleural Effusion', 'Pleural Other',
@@ -107,7 +109,7 @@ class MIMICCXRJPGDataset(Dataset):
         labels=chexpert_labels,
         datadir=None,
         downscale_factor=None,
-        transform=None,
+        transform=transforms.Compose([transforms.RandomHorizontalFlip(p=0.5),transforms.RandomRotation(degrees=[-20,20])]),
         image_subdir='files',
         label_method='ignore_uncertain',
         ):
@@ -261,9 +263,11 @@ def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False,
     """
     Cross-validation with splitting at subject level.
     """
+    datadir = Path(topdir)
+
     allrecords = pd.merge(
-        pd.read_csv(topdir / 'splitpaths.csv.gz'),
-        pd.read_csv(topdir / 'mimic-cxr-2.0.0-chexpert.csv.gz'),
+        pd.read_csv(datadir / 'splitpaths.csv.gz'),
+        pd.read_csv(datadir / 'mimic-cxr-2.0.0-chexpert.csv.gz'),
         on=['subject_id', 'study_id'],
     )
 
@@ -280,7 +284,7 @@ def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False,
         for k, (trainval_ix, test_ix) in enumerate(kf.split(uniq_subj)):
             if k != fold: continue
             trainval_subj = uniq_subj[trainval_ix]
-            test_subj = uniq_subj[trainval_ix]
+            test_subj = uniq_subj[test_ix]
             train_subj, val_subj = train_test_split(
                 trainval_subj,
                 test_size=val_size,

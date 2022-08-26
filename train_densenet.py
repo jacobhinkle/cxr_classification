@@ -12,6 +12,7 @@ from tqdm import tqdm
 import mimic_cxr_jpg
 from torch_nlp_models.meters import CSVMeter
 
+from torchvision.models import resnet
 from torchvision.models import densenet
 #from affine_augmentation import densenet
 
@@ -27,33 +28,53 @@ def nvtxblock(desc):
     finally:
         torch.cuda.nvtx.range_pop()
 
-def cxr_densenet(
+def cxr_net(
         arch='densenet121',
         pretrained=False,
         num_classes=len(mimic_cxr_jpg.chexpert_labels),
     ):
-    if arch == 'densenet121':
-        c = densenet.densenet121
-        num_init_features = 64
-    elif arch == 'densenet161':
-        c = densenet.densenet161
-        num_init_features = 96
-    elif arch == 'densenet169':
-        c = densenet.densenet169
-        num_init_features = 64
-    elif arch == 'densenet201':
-        c = densenet.densenet201
-        num_init_features = 64
-    else:
-        raise ValueError('arch must be one of: densenet121, densenet161, densenet169, densenet201')
+    if 'densenet' in arch:
 
-    mod = c(pretrained=pretrained, num_classes=1000)
-    # modify first conv to take proper input_channels
-    oldconv = mod.features.conv0
-    newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
-    newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
-    mod.features._modules['conv0'] = newconv
-    mod.classifier = nn.Linear(mod.classifier.in_features, num_classes)
+        if arch == 'densenet121':
+            c = densenet.densenet121
+            num_init_features = 64
+        elif arch == 'densenet161':
+            c = densenet.densenet161
+            num_init_features = 96
+        elif arch == 'densenet169':
+            c = densenet.densenet169
+            num_init_features = 64
+        elif arch == 'densenet201':
+            c = densenet.densenet201
+            num_init_features = 64
+        else:
+            raise ValueError('arch must be one of: densenet121, densenet161, densenet169, densenet201')
+
+        mod = c(pretrained=pretrained, num_classes=1000)
+        # modify first conv to take proper input_channels
+        oldconv = mod.features.conv0
+        newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
+        newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
+        mod.features._modules['conv0'] = newconv
+        mod.classifier = nn.Linear(mod.classifier.in_features, num_classes)
+    
+    elif 'resnet' in arch:
+        if arch == 'resnet50':
+            c = resnet.resnet50(pretrained=True,replace_stride_with_dilation=[False, True, True])
+            num_init_features = 64
+        elif arch == 'resnet101':
+            c = resnet.resnet101
+            num_init_features = 64
+        else:
+            raise ValueError('arch must be one of: resnet50, resnet101')
+
+        mod = c
+        # modify first conv to take proper input_channels
+        oldconv = mod.conv1
+        newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
+        newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
+        mod.conv1 = newconv
+        mod.fc = nn.Linear(512 * 4, num_classes)
     return mod
 
 def all_gather_vectors(tensors, *, device='cuda'):
@@ -101,7 +122,7 @@ class Trainer:
         test_data=None,
         distributed=False,
         amp=False,
-        lr=1e-3,
+        lr=0.0005,
         device='cuda',
         progress = False,
         reporter = True,
@@ -112,6 +133,7 @@ class Trainer:
         self.val_iters = val_iters
         self.output_dir = output_dir
         self.amp = amp
+        self.lr = lr
         self.distributed = distributed
         self.progress = progress
         self.reporter = reporter
@@ -157,13 +179,15 @@ class Trainer:
             self.iter_meter = CSVMeter(os.path.join(self.output_dir, 'iter_metrics.csv'))
 
         self.criterion = nn.BCEWithLogitsLoss(reduction='none')
-        #self.optim = optim.Adam(self.model.parameters(), lr=lr)
-        self.optim = optim.SGD(self.model.parameters(), lr=lr)
+        self.optim = optim.Adam(self.model.parameters(), lr=self.lr)
+        #self.optim = optim.SGD(self.model.parameters(), lr=self.lr)
 
         self.total_iters = 0
+        self.scaler = torch.cuda.amp.GradScaler()
 
     def train(self):
         self.epbar = range(self.num_epochs)
+        validation_loss = []
         if self.progress and self.reporter:
             self.epbar = tqdm(self.epbar, desc='epoch', position=2)
         for self._epoch in self.epbar:
@@ -176,6 +200,13 @@ class Trainer:
                     self.val_meter.update(**valmetrics)
             else:
                 valmetrics = {}
+            validation_loss.append(self.valLoss)
+            if len(validation_loss) >= 3:
+                if validation_loss[-1] >= validation_loss[-2] and validation_loss[-2] >= validation_loss[-3]:
+                    self.lr = self.lr / 2
+            elif len(validation_loss) >= 10:
+                if validation_loss[-1] >= validation_loss[-10]:
+                    break
             if self.reporter:
                 self.epoch_meter.update(train_loss=eploss, **valmetrics)
                 # flush all meters at least once per epoch
@@ -202,6 +233,8 @@ class Trainer:
         if self.reporter and not self.progress:
             epoch_time = datetime.now() - epoch_start
             print(f"Epoch time: {epoch_time}")
+        if self.reporter:
+            torch.save(self.model.module.state_dict(), self.output_dir + f'/model_epoch{self._epoch}.pt')
         return eploss
 
     def batch_forward(self, X, Y, Ymask):
@@ -230,7 +263,7 @@ class Trainer:
         bce = self.criterion(preds, Y)
         loss = (bce * Ymask).sum() / weightsum
         return preds, bce, loss, X, Y, Ymask
-
+    
     def iteration(self, *batch):
         self.optim.zero_grad()
 
@@ -249,10 +282,17 @@ class Trainer:
             self.itbar.set_postfix(loss=loss.item())
 
         with nvtxblock("Backward"):
-            loss.backward()
+            if self.amp:
+                self.scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
         with nvtxblock("Optim Step"):
-            self.optim.step()
+            if self.amp:
+                self.scaler.step(self.optim)
+                self.scaler.update()
+            else:
+                self.optim.step()
 
         self.total_iters += 1
 
@@ -306,8 +346,10 @@ class Trainer:
                     Ypreds[task] = gathered[i]
                     Yactual[task] = gathered[i +
                             len(mimic_cxr_jpg.chexpert_labels)]
-
+            
             metrics[split + '_loss'] = valloss/len(valbar)
+            if split == 'val':
+                self.valLoss =  valloss/len(valbar)
 
             for task in mimic_cxr_jpg.chexpert_labels:
                 Yp = Ypreds[task].cpu().numpy()
@@ -323,6 +365,7 @@ class Trainer:
         self.model.train()
         if self.reporter:
             print(f"Validation time: {datetime.now() - val_start}")
+            print(f"Learning rate: {self.lr}")
         return metrics
 
 
@@ -336,7 +379,7 @@ if __name__ == '__main__':
     parser.add_argument('--image-subdir', default='files',
             help='Subdirectory of datadir holding JPG files.')
     parser.add_argument('--arch', default='densenet121', choices=['densenet121',
-        'densenet161', 'densenet169', 'densenet201', 'msd100'],
+        'densenet161', 'densenet169', 'densenet201', 'msd100','resnet50'],
             help='Densenet architecture.')
     parser.add_argument('--from-scratch', action='store_true',
             help='Do not initialize with ImageNet pretrained weights.')
@@ -350,6 +393,12 @@ if __name__ == '__main__':
             help='Learning rate for SGD.')
     parser.add_argument('--amp', action='store_true',
             help='Use automatic mixed precision (AMP).')
+    parser.add_argument('--num-folds', default=10, type=int,
+            help='Number of folds in cross-validation')
+    parser.add_argument('--fold', required=True, type=int,
+            help='Which fold of cross-validation to use in training?')
+    parser.add_argument('--random-state', default=0,  type=int,
+            help='Random state to use in cross-validation')
     parser.add_argument('--hide-progress', action='store_true',
             help='Do not display progress bar.')
     parser.add_argument('--single-node-data-parallel', action='store_true',
@@ -388,11 +437,12 @@ if __name__ == '__main__':
     if args.single_node_data_parallel and args.distributed_data_parallel:
         raise Exception("Max one of distributed or single-node data parallel can be requested.")
 
-    train, val, test = mimic_cxr_jpg.official_split(
-        datadir=args.datadir,
-        image_subdir=args.image_subdir,
-        label_method=args.label_method,
-    )
+    train, val, test = mimic_cxr_jpg.cv(image_subdir=args.image_subdir,
+            num_folds=args.num_folds, 
+            fold=args.fold, 
+            random_state=args.random_state, 
+            stratify=False,
+            label_method={l:'zeros_uncertain_nomask' for l in mimic_cxr_jpg.chexpert_labels})
     sampler = None
 
     if args.distributed_data_parallel:
