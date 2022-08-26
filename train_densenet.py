@@ -430,7 +430,8 @@ if __name__ == '__main__':
         if args.arch == 'msd100':
             model = MSDClassifier2d(1, len(mimic_cxr_jpg.chexpert_labels), depth=100, maxdil=10, width=1)
     else:
-        model = cxr_net(args.arch)
+        model = cxr_densenet(args.arch, pretrained=not args.from_scratch)
+
     nparams = sum([p.numel() for p in model.parameters()])
 
     if args.single_node_data_parallel and args.distributed_data_parallel:

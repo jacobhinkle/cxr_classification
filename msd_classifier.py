@@ -23,4 +23,3 @@ class MSDClassifier2d(nn.Module):
         f = self.features(x)
         p = self.pool(f)
         return self.classifier(p.view(-1, p.shape[1]))
-
