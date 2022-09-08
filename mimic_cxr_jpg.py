@@ -112,11 +112,15 @@ class MIMICCXRJPGDataset(Dataset):
         transform=transforms.Compose([transforms.RandomHorizontalFlip(p=0.5),transforms.RandomRotation(degrees=[-20,20])]),
         image_subdir='files',
         label_method='ignore_uncertain',
+        load_activations=False,  # If True, load .pth files and do not apply transforms
         ):
+        super().__init__()
+
         self.dataframe = dataframe
         self.labels = labels
         self.downscale_factor = downscale_factor
         self.transform = transform
+        self.load_activations = load_activations
 
         if isinstance(label_method, str):
             label_method = {k: label_method for k in chexpert_labels}
@@ -198,13 +202,19 @@ class MIMICCXRJPGDataset(Dataset):
     def __getitem__(self, ix):
         row = self.dataframe.iloc[ix]
 
-        im = Image.open(self.datadir / row.path)
+        if self.load_activations:
+            # Replace extension with .pth
+            b, _ = os.path.splitext(row.path)
+            pthpath = b + '.pth'
+            im = torch.load(self.datadir / pthpath)
+        else:
+            im = Image.open(self.datadir / row.path)
 
-        if self.transform is not None:
-            im = self.transform(im)
+            if self.transform is not None:
+                im = self.transform(im)
 
-        if self.downscale_factor is not None:
-            im = F.avg_pool2d(im.type(torch.float32), self.downscale_factor)
+            if self.downscale_factor is not None:
+                im = F.avg_pool2d(im.type(torch.float32), self.downscale_factor)
 
         labels, labelmask = self.map_labels(row[self.labels])
 
