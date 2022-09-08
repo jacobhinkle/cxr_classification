@@ -221,6 +221,139 @@ class MIMICCXRJPGDataset(Dataset):
         return im, labels, labelmask
 
 
+class MIMICCXRJPGStudyDataset(MIMICCXRJPGDataset):
+    """
+    This class implements a :class:`torch.utils.data.Dataset` that serves the
+    MIMIC-CXR-JPG dataset one study (multiple images) at a time.
+
+    Images are served as uint8 tensors of shape (1, H, W) where H and W are the
+    height and width of the image in its native resolution. Notice that these
+    numbers vary from image to image, so resampling must be used for
+    minibatching.
+
+    There are 14 binary labels associated with each image (actually each group
+    of images referred to as a study).
+    Labels in this dataset have a high degree of missingness, and come in four
+    flavors:
+        - Label is positive
+        - Label is negative
+        - Label was not mentioned (missing)
+        - Label was mentioned and specifically indicated to be unknown.
+    The first two cases are specified by ones and zeros in a length-14 int8
+    vector called labels.  For our purposes the last two cases are treated
+    equally as missing data.  Missing data is indicated by an additional
+    length-14 int8 vector called labelmask, whose ones indicate positive or
+    negative labels and whose zeros indicate missing labels for this example.
+
+    You can request various behaviors for how these uncertain labels are
+    treated, using the 'label_method' argument:
+        - 'ignore_uncertain' (default):
+            - corresponds to U-Ignore in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels
+            - mask: zero whenever label is missing or unknown
+        - 'zeros_uncertain':
+            - corresponds to U-Zeros in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels or unknown
+            - mask: zero whenever label is missing. one otherwise
+        - 'ones_uncertain':
+            - corresponds to U-Ones in CheXpert paper
+            - 1 = positive labels or unknown
+            - 0 = negative labels
+            - mask: zero whenever label is missing. one otherwise
+        - 'zeros_uncertain_nomask':
+            - corresponds to U-Zeros in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels, missing, or unknown
+            - mask: all ones
+        - 'ones_uncertain_nomask':
+            - corresponds to U-Ones in CheXpert paper
+            - 1 = positive labels or unknown
+            - 0 = negative labels or missing
+            - mask: all ones
+        - 'three_class':
+            - corresponds to U-MultiClass in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels
+            - 2 = unknown
+            - mask: zero whenever label is missing. one otherwise
+        - 'four_class':
+            - not implemented in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels
+            - 2 = unknown
+            - 3 = missing
+            - mask: all ones
+        - 'missing_neg':
+            - not implemented in CheXpert paper
+            - 1 = positive labels
+            - 0 = negative labels and missing
+            - mask: zero when unknown. one otherwise
+
+    If 'label_method' is a string, that method is applied to all labels. If it
+    is a 'dict', then the keys must be the names of the conditions (exhaustive),
+    and the values must be strings indicating which method to use.
+
+    Note that 'No Finding' is "assigned a positive label (1) if
+    there is no pathology classified as positive or uncertain" [1]. Therefore it
+    only obtains values of 1 or missing, so 'missing_neg' is applied to 'No
+    Finding' unless explicitly overridden by providing 'label_method' as a dict.
+
+    [1] CheXpert paper: https://arxiv.org/pdf/1901.07031.pdf
+    """
+    def __init__(
+        self,
+        dataframe,
+        labels=chexpert_labels,
+        datadir=None,
+        downscale_factor=None,
+        transform=transforms.Compose([transforms.RandomHorizontalFlip(p=0.5),transforms.RandomRotation(degrees=[-20,20])]),
+        image_subdir='files',
+        label_method='ignore_uncertain',
+        load_activations=False,  # If True, load .pth files and do not apply transforms
+        ):
+        super().__init__(
+            dataframe,
+            labels=labels,
+            datadir=datadir,
+            downscale_factor=downscale_factor,
+            transform=transform,
+            image_subdir=image_subdir,
+            label_method=label_method,
+            load_activations=load_activations,
+        )
+
+        # derive study-level reports and labels using image-level dataframe
+        self.meta = dataframe[['subject_id', 'study_id', 'ReportText'] +
+                chexpert_labels].drop_duplicates()
+
+        # replace missing reports with empty strings
+        self.meta.ReportText = self.meta.ReportText.fillna('')
+
+        # group the studies
+        self.study_group = meta.groupby(study_keys)
+        self.study_names = sorted(self.study_group.groups.keys())
+
+    def __len__(self):
+        return len(self.study_group)
+
+    def __getitem__(self, i):
+        name = self.study_names[i]
+        study = self.study_group.get_group(name)
+
+        # return lists of ragged-shaped tensors, along with ViewPositions as strings
+        imgs, vp = [],[]
+        for i in range(len(study)):
+            image = self.transform(Image.open(os.path.join(self.jpg_dir, study.iloc[[i]].iloc[0].path)))
+            imgs.append(image)
+            vp.append(study.iloc[[i]].iloc[0].ViewPosition)
+            labels = study.iloc[[i]].iloc[0][self.labels]
+            report_text = study.iloc[[i]].iloc[0].ReportText
+
+        return imgs, labels, vp, name, report_text
+
+
 def official_split(
         datadir=topdir,
         train_transform=transforms.Compose([
