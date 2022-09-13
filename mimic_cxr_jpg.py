@@ -1,8 +1,5 @@
 """PyTorch Datasets for MIMIC-CXR-JPG"""
 
-import os
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -10,17 +7,88 @@ import torch
 import torchvision
 import torch.nn.functional as F
 from torchvision import transforms
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from tqdm import tqdm
 
-topdir = Path('/mnt/DGX01/Personal/4jh/cxr/MIMIC-CXR-JPG')
-chexpert_labels = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema',
-    'Enlarged Cardiomediastinum', 'Fracture', 'Lung Lesion',
-    'Lung Opacity', 'No Finding', 'Pleural Effusion', 'Pleural Other',
-    'Pneumonia', 'Pneumothorax', 'Support Devices']
+import os
+from pathlib import Path
+import zipfile
 
-normalize = transforms.Normalize(mean=[0.449], #[0.485, 0.456, 0.406],
-                                 std=[0.226]) #[0.229, 0.224, 0.225]),
+topdir = Path("/mnt/DGX01/Personal/4jh/cxr/MIMIC-CXR-JPG")
+chexpert_labels = [
+    "Atelectasis",
+    "Cardiomegaly",
+    "Consolidation",
+    "Edema",
+    "Enlarged Cardiomediastinum",
+    "Fracture",
+    "Lung Lesion",
+    "Lung Opacity",
+    "No Finding",
+    "Pleural Effusion",
+    "Pleural Other",
+    "Pneumonia",
+    "Pneumothorax",
+    "Support Devices",
+]
+
+normalize = transforms.Normalize(
+    mean=[0.449], std=[0.226]  # [0.485, 0.456, 0.406],
+)  # [0.229, 0.224, 0.225]),
+
+
+def load_all_metadata(
+        data_dir=topdir,  # directory containing all the .csv.gz files
+    ):
+    """
+    Load all metadata files, joining appropriately.
+
+    This loads the following files and joins on dicom_id and study_id (where
+    appropriate):
+
+    - mimic-cxr-2.0.0-metadata.csv.gz
+    - mimic-cxr-2.0.0-chexpert.csv.gz
+    - mimic-cxr-2.0.0-split.csv.gz
+    - mimic-cxr-reports.zip
+    """
+    data_dir = Path(data_dir)
+
+    metadata = pd.read_csv(data_dir / "mimic-cxr-2.0.0-metadata.csv.gz")
+    chexpert = pd.read_csv(data_dir / "mimic-cxr-2.0.0-chexpert.csv.gz")
+    splitpaths = pd.read_csv(data_dir / "splitpaths.csv.gz")
+
+    meta = pd.merge(
+        metadata,
+        splitpaths,
+        on=["dicom_id", "subject_id", "study_id"],
+    )
+    meta = pd.merge(
+        meta,
+        chexpert,
+        on=["subject_id", "study_id"],
+    )
+
+    return meta
+
+
+def label_prevalences(dataloader):
+    """Return average of the labels vector, over all examples in a dataset"""
+    if isinstance(dataloader, Dataset):
+        # convert to DataLoader with some default args
+        dataloader = DataLoader(dataloader, batch_size=8, num_workers=1)
+    else:
+        assert isinstance(dataloader, DataLoader)
+
+    sum_label = 0
+    num_instances =0 
+    with torch.no_grad():
+        for _, labels, *_ in tqdm(dataloader):
+            num_instances += labels.shape[0]
+            labels = labels.sum(dim=0)
+            sum_label = sum_label + labels.type(torch.float64)
+    return sum_label / num_instances
+
 
 class MIMICCXRJPGDataset(Dataset):
     """
@@ -103,17 +171,23 @@ class MIMICCXRJPGDataset(Dataset):
 
     [1] CheXpert paper: https://arxiv.org/pdf/1901.07031.pdf
     """
+
     def __init__(
         self,
         dataframe,
         labels=chexpert_labels,
         datadir=None,
         downscale_factor=None,
-        transform=transforms.Compose([transforms.RandomHorizontalFlip(p=0.5),transforms.RandomRotation(degrees=[-20,20])]),
-        image_subdir='files',
-        label_method='ignore_uncertain',
+        transform=transforms.Compose(
+            [
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomRotation(degrees=[-20, 20]),
+            ]
+        ),
+        image_subdir="files",
+        label_method="zeros_uncertain_nomask",  # old default: "ignore_uncertain"
         load_activations=False,  # If True, load .pth files and do not apply transforms
-        ):
+    ):
         super().__init__()
 
         self.dataframe = dataframe
@@ -124,13 +198,14 @@ class MIMICCXRJPGDataset(Dataset):
 
         if isinstance(label_method, str):
             label_method = {k: label_method for k in chexpert_labels}
-            label_method['No Finding'] = 'missing_neg'
+            label_method["No Finding"] = "missing_neg"
         elif not isinstance(label_method, dict):
-            raise TypeError('label_method must be string or dict.')
+            raise TypeError("label_method must be string or dict.")
         assert len(label_method) == len(chexpert_labels)
         self.label_method = label_method
 
         if datadir is None:
+            print(f"Using default data directory: {datadir}")
             datadir = topdir
         self.datadir = Path(datadir) / image_subdir
 
@@ -143,22 +218,22 @@ class MIMICCXRJPGDataset(Dataset):
         for i, c in enumerate(chexpert_labels):
             m = self.label_method[c]
             l = float(row[i])
-            if m == 'ignore_uncertain':
+            if m == "ignore_uncertain":
                 mask.append(1 - np.isnan(l) + (l == -1.0))
                 labels.append(l == 1.0)
-            elif m == 'zeros_uncertain':
+            elif m == "zeros_uncertain":
                 mask.append(1 - np.isnan(l))
                 if l == -1.0:
                     labels.append(0)
                 else:
                     labels.append(l)
-            elif m == 'ones_uncertain':
+            elif m == "ones_uncertain":
                 mask.append(1 - np.isnan(l))
                 if l == -1.0:
                     labels.append(1)
                 else:
                     labels.append(l)
-            elif m == 'zeros_uncertain_nomask':
+            elif m == "zeros_uncertain_nomask":
                 mask.append(1)
                 if l == -1.0:
                     labels.append(0)
@@ -166,7 +241,7 @@ class MIMICCXRJPGDataset(Dataset):
                     labels.append(0)
                 else:
                     labels.append(l)
-            elif m == 'ones_uncertain_nomask':
+            elif m == "ones_uncertain_nomask":
                 mask.append(1)
                 if l == -1.0:
                     labels.append(1)
@@ -174,13 +249,13 @@ class MIMICCXRJPGDataset(Dataset):
                     labels.append(0)
                 else:
                     labels.append(l)
-            elif m == 'three_class':
+            elif m == "three_class":
                 mask.append(1 - np.isnan(l))
                 if l == -1.0:
                     labels.append(2)
                 else:
                     labels.append(l)
-            elif m == 'four_class':
+            elif m == "four_class":
                 mask.append(1)
                 if l == -1.0:
                     labels.append(2)
@@ -188,24 +263,22 @@ class MIMICCXRJPGDataset(Dataset):
                     labels.append(3)
                 else:
                     labels.append(l)
-            elif m == 'missing_neg':
+            elif m == "missing_neg":
                 mask.append(1 - (l == -1.0))
                 labels.append(l == 1.0)
             else:
-                raise ValueError(f'Unknown label method: {m}')
+                raise ValueError(f"Unknown label method: {m}")
 
         labels = torch.as_tensor(labels).type(torch.int8)
         mask = torch.as_tensor(mask).type(torch.int8)
 
         return labels, mask
 
-    def __getitem__(self, ix):
-        row = self.dataframe.iloc[ix]
-
+    def get_from_row(self, row):
         if self.load_activations:
             # Replace extension with .pth
             b, _ = os.path.splitext(row.path)
-            pthpath = b + '.pth'
+            pthpath = b + ".pth"
             im = torch.load(self.datadir / pthpath)
         else:
             im = Image.open(self.datadir / row.path)
@@ -221,7 +294,32 @@ class MIMICCXRJPGDataset(Dataset):
         return im, labels, labelmask
 
 
-class MIMICCXRJPGStudyDataset(MIMICCXRJPGDataset):
+    def __getitem__(self, ix):
+        row = self.dataframe.iloc[ix]
+
+        return self.get_from_row(row)
+
+
+def collate_studies(studies):
+    """Collate studies in a reasonable way"""
+    ims = []
+    labs = []
+    masks = []
+    lengths = []
+    metas = []
+    off = 0
+    for im, lab, mask, meta in studies:
+        ims.extend(im)
+        labs.extend(lab)
+        masks.extend(mask)
+        metas.append(meta)
+        lengths.append(len(im))
+
+    return torch.stack(ims), torch.stack(labs), torch.stack(masks), lengths, pd.concat(metas)
+
+
+
+class MIMICCXRJPGStudyDataset(Dataset):
     """
     This class implements a :class:`torch.utils.data.Dataset` that serves the
     MIMIC-CXR-JPG dataset one study (multiple images) at a time.
@@ -302,71 +400,105 @@ class MIMICCXRJPGStudyDataset(MIMICCXRJPGDataset):
 
     [1] CheXpert paper: https://arxiv.org/pdf/1901.07031.pdf
     """
+
     def __init__(
         self,
-        dataframe,
-        labels=chexpert_labels,
-        datadir=None,
-        downscale_factor=None,
-        transform=transforms.Compose([transforms.RandomHorizontalFlip(p=0.5),transforms.RandomRotation(degrees=[-20,20])]),
-        image_subdir='files',
-        label_method='ignore_uncertain',
-        load_activations=False,  # If True, load .pth files and do not apply transforms
-        ):
-        super().__init__(
-            dataframe,
-            labels=labels,
-            datadir=datadir,
-            downscale_factor=downscale_factor,
-            transform=transform,
-            image_subdir=image_subdir,
-            label_method=label_method,
-            load_activations=load_activations,
-        )
+        image_meta,
+        report_zip=None,
+        **ds_kwargs,
+    ):
+        super().__init__()
 
-        # derive study-level reports and labels using image-level dataframe
-        self.meta = dataframe[['subject_id', 'study_id', 'ReportText'] +
-                chexpert_labels].drop_duplicates()
+        self.image_meta = image_meta
 
-        # replace missing reports with empty strings
-        self.meta.ReportText = self.meta.ReportText.fillna('')
+        self.report_z = zipfile.ZipFile(report_zip, 'r') if report_zip is not None else None
+
+        # instantiate a Dataset for individual images
+        self.im_ds = MIMICCXRJPGDataset(image_meta, **ds_kwargs)
 
         # group the studies
-        self.study_group = meta.groupby(study_keys)
+        study_keys = ['subject_id', 'study_id']  # used to identify a study
+        self.study_group = self.image_meta.groupby(study_keys)
         self.study_names = sorted(self.study_group.groups.keys())
 
     def __len__(self):
         return len(self.study_group)
 
-    def __getitem__(self, i):
-        name = self.study_names[i]
-        study = self.study_group.get_group(name)
+    def get_study(self, study_name):
+        study = self.study_group.get_group(study_name)
 
         # return lists of ragged-shaped tensors, along with ViewPositions as strings
-        imgs, vp = [],[]
+        imgs, labels, labelmasks = [], [], []
         for i in range(len(study)):
-            image = self.transform(Image.open(os.path.join(self.jpg_dir, study.iloc[[i]].iloc[0].path)))
-            imgs.append(image)
-            vp.append(study.iloc[[i]].iloc[0].ViewPosition)
-            labels = study.iloc[[i]].iloc[0][self.labels]
-            report_text = study.iloc[[i]].iloc[0].ReportText
+            row = study.iloc[i]  # row corresponding to each image
+            img, l, m = self.im_ds.get_from_row(row)
 
-        return imgs, labels, vp, name, report_text
+            imgs.append(img)
+            labels.append(l)
+            labelmasks.append(m)
+
+        if self.report_z is not None:
+            # infer report path from row path
+            reppath = 'files/' + os.path.dirname(row.path) + '.txt'
+            # load report from zip file
+            rep = self.report_z.open(reppath).read()
+            # add a new column ReportText (repeated across study)
+            study.insert(len(study.columns), 'ReportText', rep)
+
+        return imgs, labels, labelmasks, study
+
+    def __getitem__(self, i):
+        return self.get_study(self.study_names[i])
 
 
-def official_split(
-        datadir=topdir,
-        train_transform=transforms.Compose([
+def records_dataset(
+    records,
+    datadir,
+    train_transform=transforms.Compose(
+        [
             transforms.RandomHorizontalFlip(),
             transforms.RandomRotation(15),
             transforms.ToTensor(),
             normalize,
-            ]),
-        test_transform=transforms.Compose([
+        ]
+    ),
+    test_transform=transforms.Compose(
+        [
             transforms.ToTensor(),
             normalize,
-            ]),
-        **kwargs):
+        ]
+    ),
+    return_studies=False,
+    load_reports=False,
+    dataloaders=False,  # whether to create dataloaders or just return datasets
+    dl_kwargs={},
+    **kwargs,
+):
+    ds_cls = MIMICCXRJPGStudyDataset if return_studies else MIMICCXRJPGDataset
+
+    if load_reports and return_studies:
+        # pass report_zip only if needed
+        kwargs['report_zip'] = os.path.join(datadir, 'mimic-cxr-reports.zip')
+
+    ret = ds_cls(
+        records,
+        datadir=datadir,
+        transform=train_transform,
+        **kwargs,
+    )
+
+    if dataloaders:
+        collate_fn = collate_studies if return_studies else None
+        ret = DataLoader(ret, collate_fn=collate_fn, **dl_kwargs)
+
+    return ret
+
+
+def official_split(
+    datadir=topdir,
+    dicom_id_file=None,
+    **kwargs,
+):
     """
     The MIMIC-CXR-JPG dataset comes with an official train-val-test split, which
     this function implements.
@@ -375,57 +507,64 @@ def official_split(
     """
     datadir = Path(datadir)
 
-    allrecords = pd.merge(
-        pd.read_csv(datadir / 'splitpaths.csv.gz'),
-        pd.read_csv(datadir / 'mimic-cxr-2.0.0-chexpert.csv.gz'),
-        on=['subject_id', 'study_id'],
+    allrecords = load_all_metadata(datadir)
+
+    if dicom_id_file is not None:
+        # restrict to only the given dicoms, if given
+        dcms = pd.read_csv(dicom_id_file)
+        allrecords = pd.merge(allrecords, dcms[['dicom_id']], on='dicom_id')
+
+    trainrecs = allrecords.query('split == "train"')
+    valrecs = allrecords.query('split == "validate"')
+    testrecs = allrecords.query('split == "test"')
+
+    return (
+        records_dataset(trainrecs, datadir, **kwargs),
+        records_dataset(valrecs, datadir, **kwargs),
+        records_dataset(testrecs, datadir, **kwargs),
     )
 
-    train = MIMICCXRJPGDataset(allrecords.query('split == "train"'),
-            datadir=datadir, transform=train_transform, **kwargs)
-    val = MIMICCXRJPGDataset(allrecords.query('split == "validate"'),
-            datadir=datadir, transform=test_transform, **kwargs)
-    test = MIMICCXRJPGDataset(allrecords.query('split == "test"'),
-        datadir=datadir, transform=test_transform, **kwargs)
 
-    return train, val, test
-
-
-def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False, 
-        train_transform=transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(15),
-            transforms.ToTensor(),
-            normalize,
-            ]),
-        test_transform=transforms.Compose([
-            transforms.ToTensor(),
-            normalize,
-            ]),
-        **kwargs):
+def cv(
+    num_folds,
+    fold,
+    datadir=topdir,
+    dicom_id_file=None,
+    val_size=0.1,
+    random_state=0,
+    stratify=False,
+    **kwargs,
+):
     """
     Cross-validation with splitting at subject level.
     """
-    datadir = Path(topdir)
+    datadir = Path(datadir)
 
-    allrecords = pd.merge(
-        pd.read_csv(datadir / 'splitpaths.csv.gz'),
-        pd.read_csv(datadir / 'mimic-cxr-2.0.0-chexpert.csv.gz'),
-        on=['subject_id', 'study_id'],
-    )
+    allrecords = load_all_metadata(datadir)
+
+    if dicom_id_file is not None:
+        # restrict to only the given dicoms, if given
+        dcms = pd.read_csv(dicom_id_file)
+        allrecords = pd.merge(allrecords, dcms[['dicom_id']], on='dicom_id')
 
     if stratify:
         # convert to binary labels
         allrecords_binary = allrecords.copy()
-        allrecords_binary[chexpert_labels] = (allrecords_binary[chexpert_labels] == 1).astype(int)
+        allrecords_binary[chexpert_labels] = (
+            allrecords_binary[chexpert_labels] == 1
+        ).astype(int)
         # combine by collecting findings from all studies for each subject
-        subject_findings = (allrecords_binary[['subject_id'] + chexpert_labels].groupby('subject_id')).max()
+        subject_findings = (
+            allrecords_binary[["subject_id"] + chexpert_labels].groupby("subject_id")
+        ).max()
     else:
         from sklearn.model_selection import KFold, train_test_split
-        kf = KFold(num_folds)#, random_state=random_state, shuffle=True)
-        uniq_subj = allrecords['subject_id'].unique()
+
+        kf = KFold(num_folds)  # , random_state=random_state, shuffle=True)
+        uniq_subj = allrecords["subject_id"].unique()
         for k, (trainval_ix, test_ix) in enumerate(kf.split(uniq_subj)):
-            if k != fold: continue
+            if k != fold:
+                continue
             trainval_subj = uniq_subj[trainval_ix]
             test_subj = uniq_subj[test_ix]
             train_subj, val_subj = train_test_split(
@@ -435,23 +574,124 @@ def cv(num_folds, fold, val_size=0.1, random_state=0, stratify=False,
                 shuffle=False,
             )
 
-    subjrecs = lambda s: pd.DataFrame({'subject_id': s}).merge(allrecords, how='left', on='subject_id')
+    subjrecs = lambda s: pd.DataFrame({"subject_id": s}).merge(
+        allrecords, how="left", on="subject_id"
+    )
     trainrecords = subjrecs(train_subj)
     valrecords = subjrecs(val_subj)
     testrecords = subjrecs(test_subj)
 
-    train = MIMICCXRJPGDataset(trainrecords, transform=train_transform, **kwargs)
-    val = MIMICCXRJPGDataset(valrecords, transform=test_transform, **kwargs)
-    test = MIMICCXRJPGDataset(testrecords, transform=test_transform, **kwargs)
+    return (
+        records_dataset(trainrecords, datadir, **kwargs),
+        records_dataset(valrecords, datadir, **kwargs),
+        records_dataset(testrecords, datadir, **kwargs),
+    )
 
-    return train, val, test
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser('Explore the MIMIC-CXR-JPG dataset')
+    parser.add_argument(
+        '--data_dir',
+        default="/scratch/4jh/cxr/MIMIC-CXR-JPG",
+        help="Location of top-level MIMIC-CXR-JPG directory",
+    )
+    parser.add_argument(
+        '--image_subdir',
+        default="files",
+        help="Location of JPG file subdirectory under top-level MIMIC-CXR-JPG directory",
+    )
+    parser.add_argument(
+        '--split_type',
+        choices=("official", "cv"),
+        default="official",
+        help="Whether to use the official split or create our own cross-validation splits",
+    )
+    parser.add_argument(
+        '--return_studies',
+        action='store_true',
+        help="Whether to consider an entire study an example. If false, each "
+        "image is an independent example, and the corresponding study's labels "
+        "are re-used for each image in the study",
+    )
+    parser.add_argument(
+        '--load_reports',
+        action='store_true',
+        help="If given, test loading reports into the metadata of each study. "
+        "Only has effect if --return_studies also given.",
+    )
+    parser.add_argument(
+        '--dicom_id_file',
+        help="If given, restrict to only the dicom_ids in the 'dicom_id' column of a given CSV file",
+    )
+    args = parser.parse_args()
 
-if __name__ == '__main__':
-    #train, val, test = official_split()
-    train, val, test = cv(10, 0, random_state=0, stratify=False)
+    print("Split type:", args.split_type)
+    common_args = dict(
+        datadir=args.data_dir,
+        image_subdir=args.image_subdir,
+        dicom_id_file=args.dicom_id_file,
+        return_studies=args.return_studies,
+        load_reports=args.load_reports,
+    )
+    # NOTE: as of 2022-09-13 CPython's zipfile breaks on
+    # multithreaded reads
+    num_workers = 1 if args.load_reports else 12
+    if args.split_type == "official":
+        train, val, test = official_split(**common_args)
+        traindl, valdl, testdl = official_split(
+            **common_args,
+            dataloaders=True,
+            dl_kwargs={
+                'batch_size': 8,
+                'num_workers': num_workers,
+                },
+        )
+    else:
+        cv_args = dict(
+            **common_args,
+            num_folds=10,
+            fold=0,
+            random_state=0,
+            stratify=False,
+        )
+        train, val, test = cv(**cv_args)
+        traindl, valdl, testdl = cv(
+            **cv_args,
+            dataloaders=True,
+            dl_kwargs={
+                'batch_size': 8,
+                'num_workers': num_workers,
+                },
+        )
 
-    print(len(train), len(val), len(test))
+    print("Train/val/test number of examples:", len(train), len(val), len(test))
+    print("Train/val/test number of batches:", len(traindl), len(valdl), len(testdl))
 
-    print(train[0])
-    print(val[0])
-    print(test[0])
+    batch = next(iter(traindl))
+    print("\nSample batch (train):")
+    print("  Types:", *(type(b).__name__ for b in batch))
+    if args.return_studies:
+        print("  Shapes:", batch[0].shape, batch[1].shape, batch[2].shape,
+                len(batch[3]), batch[4].shape)
+        print("  Interpretation: images, labels, labelmasks, studylengths, metadata")
+        print("  Study lengths (list):", batch[3])
+        print("  Metadata (dataframe):")
+        print("    Columns:", batch[4].columns)
+        print(batch[4])
+        if args.load_reports:
+            print("  First report:\n", batch[4].iloc[0].ReportText)
+    else:
+        print("  Shapes:", *(b.shape for b in batch))
+        print("  Interpretation: images, labels, labelmasks")
+    print("  Labels:", batch[1])
+    print("  Label masks:", batch[2])
+
+    prev_train = pd.DataFrame(label_prevalences(traindl), index=chexpert_labels)
+    prev_val = pd.DataFrame(label_prevalences(valdl), index=chexpert_labels)
+    prev_test = pd.DataFrame(label_prevalences(testdl), index=chexpert_labels)
+    print("\nLabel prevalences (train):")
+    print(prev_train)
+    print("\nLabel prevalences (val):")
+    print(prev_val)
+    print("\nLabel prevalences (test):")
+    print(prev_test)
