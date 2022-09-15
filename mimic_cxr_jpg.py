@@ -56,7 +56,7 @@ def load_all_metadata(
 
     metadata = pd.read_csv(data_dir / "mimic-cxr-2.0.0-metadata.csv.gz")
     chexpert = pd.read_csv(data_dir / "mimic-cxr-2.0.0-chexpert.csv.gz")
-    splitpaths = pd.read_csv(data_dir / "splitpaths.csv")
+    splitpaths = pd.read_csv(data_dir / "splitpaths.csv.gz")
 
     meta = pd.merge(
         metadata,
