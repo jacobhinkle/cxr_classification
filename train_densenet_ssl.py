@@ -520,25 +520,21 @@ if __name__ == "__main__":
             output_device=gpunum,
         )
 
-    try:
+    t = Trainer(
+        model,
+        train,
+        args.epochs,
+        args.outputdir,
+        feature_pooling=args.feature_pooling,
+        batch_size=args.batch_size,
+        val_iters=args.val_iters,
+        val_data=val,
+        test_data=test,
+        progress=not args.hide_progress,
+        reporter=rank == 0,
+        device=device,
+        amp=args.amp,
+        distributed=args.distributed_data_parallel,
+    )
 
-        t = Trainer(
-            model,
-            train,
-            args.epochs,
-            args.outputdir,
-            feature_pooling=args.feature_pooling,
-            batch_size=args.batch_size,
-            val_iters=args.val_iters,
-            val_data=val,
-            test_data=test,
-            progress=not args.hide_progress,
-            reporter=rank == 0,
-            device=device,
-            amp=args.amp,
-            distributed=args.distributed_data_parallel,
-        )
-
-        t.train()
-    finally:
-        dist.destroy_process_group()
+    t.train()

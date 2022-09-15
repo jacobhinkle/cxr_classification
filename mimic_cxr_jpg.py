@@ -53,6 +53,7 @@ def load_all_metadata(
     - mimic-cxr-reports.zip
     """
     data_dir = Path(data_dir)
+    print(data_dir)
 
     metadata = pd.read_csv(data_dir / "mimic-cxr-2.0.0-metadata.csv.gz")
     chexpert = pd.read_csv(data_dir / "mimic-cxr-2.0.0-chexpert.csv.gz")
