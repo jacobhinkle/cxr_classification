@@ -435,8 +435,9 @@ class MIMICCXRJPGStudyDataset(Dataset):
             img, l, m = self.im_ds.get_from_row(row)
 
             imgs.append(img)
-            labels.append(l)
-            labelmasks.append(m)
+            if i == 0:
+                labels.append(l)
+                labelmasks.append(m)
 
         if self.report_z is not None:
             # infer report path from row path
