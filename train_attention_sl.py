@@ -40,7 +40,7 @@ def nvtxblock(desc):
     finally:
         torch.cuda.nvtx.range_pop()
 
-class attentionModel(torch.nn.Module):
+class attentionModel(nn.Module):
     def __init__(
         self,
         embed_dim,
@@ -49,13 +49,17 @@ class attentionModel(torch.nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
-        self.avgpool = torch.nn.AdaptiveAvgPool2d((1,1))
-        self.self_attn = torch.nn.MultiheadAttention(self.embed_dim, self.num_heads)
-        self.maxpool = torch.nn.MaxPool2d((1,2))
-        self.linear1 = torch.nn.Linear(1024, 512)
-        self.linear2 = torch.nn.Linear(512, 256)
-        self.linear3 = torch.nn.Linear(256, 128)
-        self.linear4 = torch.nn.Linear(128, 14)
+        self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        self.self_attn = nn.MultiheadAttention(self.embed_dim, self.num_heads)
+        self.maxpool = nn.MaxPool2d((1,2))
+        self.classifier = nn.Sequential(nn.Linear(1024, 512),
+                                        nn.ReLU(),
+                                        nn.Linear(512, 256),
+                                        nn.ReLU(),
+                                        nn.Linear(256, 128),
+                                        nn.ReLU(),
+                                        nn.Linear(128, 14),
+                                        )
 
     def forward(self, x):
         #pooling
@@ -67,10 +71,7 @@ class attentionModel(torch.nn.Module):
         attn_output, _ = self.self_attn(pooled_activation, pooled_activation, pooled_activation) # attn_output shape (N,L,E) => (1,15,1024)
 
         #Linear layer
-        output1 = self.linear1(attn_output.squeeze(0)) 
-        output2 = self.linear2(output1)
-        output3 = self.linear3(output2)
-        output = self.linear4(output3)
+        output = self.classifier(attn_output.squeeze(0)) 
 
         return output
 
@@ -233,30 +234,60 @@ class Trainer:
 
     def batch_forward(self, X, Y, Ymask, lengths, meta):
         Ymask = Ymask.to(device)
-        weightsum = Ymask.sum()
-
-        if self.distributed:
-            # start reducing the number of weights in background early
-            with torch.no_grad():
-                weightsync_hdl = dist.all_reduce(weightsum, async_op=True)
-
         X = X.type(torch.float32).to(device)
         Y = Y.type(torch.float32).to(device)
 
-        preds = self.model(X)
+        prediction = []
+        losses = []
+    
+        for i in range(len(lengths)):
+            weightsum = Ymask[i].sum()
 
-        if self.distributed:
-            weightsync_hdl.wait()
-        weightsum = weightsum.item()
-        if weightsum == 0:
-            # if _reduced_ weightsum is zero, then entire minibatch (every
-            # microbatch) holds no actual labels, and we can skip this
-            # iteration. Otherwise, all ranks must continue to participate in
-            # order to avoid a deadlock on the backward pass.
-            return
+            if self.distributed:
+                # start reducing the number of weights in background early
+                with torch.no_grad():
+                    weightsync_hdl = dist.all_reduce(weightsum, async_op=True)
 
-        bce = self.criterion(preds, Y)
-        loss = (bce * Ymask).sum() / weightsum
+            if lengths[i] == 1:     # if we have only one image in the study
+                preds = self.model(X[i].unsqueeze(0))
+                prediction.append(preds)
+                bce = self.criterion(preds, Y[i].unsqueeze(0))
+                if self.distributed:
+                    weightsync_hdl.wait()
+                weightsum = weightsum.item()
+                if weightsum == 0:
+                    # if _reduced_ weightsum is zero, then entire minibatch (every
+                    # microbatch) holds no actual labels, and we can skip this
+                    # iteration. Otherwise, all ranks must continue to participate in
+                    # order to avoid a deadlock on the backward pass.
+                    return
+                loss = (bce * Ymask[i]).sum() / weightsum
+                losses.append(loss)
+
+            else:                  # if we have multiple images in the study
+                pred = []
+                for j in range(lengths[i]):
+                    preds = self.model(X[i+j].unsqueeze(0))
+                    pred.append(preds)
+                pred = torch.stack((pred))
+                pred = pred.mean(dim=0) #average predictions for multiple images
+                prediction.append(pred)
+                bce = self.criterion(pred, Y[i].unsqueeze(0))
+                if self.distributed:
+                    weightsync_hdl.wait()
+                weightsum = weightsum.item()
+                if weightsum == 0:
+                    # if _reduced_ weightsum is zero, then entire minibatch (every
+                    # microbatch) holds no actual labels, and we can skip this
+                    # iteration. Otherwise, all ranks must continue to participate in
+                    # order to avoid a deadlock on the backward pass.
+                    return
+                loss = (bce * Ymask[i]).sum() / weightsum
+                losses.append(loss)
+
+        loss = torch.stack((losses)).mean()
+        preds = torch.stack((prediction)).squeeze(1)
+
         return preds,loss, X, Y, Ymask
 
     def iteration(self, *batch):
@@ -380,7 +411,7 @@ class Trainer:
             #metrics[split + '_loss'] = valloss/len(valbar)
             if split == 'val':
                 self.valLoss =  valloss/len(valbar)
-                
+
             for task in mimic_cxr_jpg.chexpert_labels:
                 Yp = Ypreds[task].cpu().numpy()
                 Ya = Yactual[task].cpu().numpy()
