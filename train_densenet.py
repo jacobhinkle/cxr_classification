@@ -10,7 +10,7 @@ import torchvision.models.resnet as tvresnet
 from tqdm import tqdm
 
 import mimic_cxr_jpg
-from torch_nlp_models.meters import CSVMeter
+from meters import CSVMeter
 
 from torchvision.models import resnet
 from torchvision.models import densenet
@@ -197,7 +197,9 @@ class Trainer:
                 with nvtxblock("Val Epoch"):
                     valmetrics = self.validate()
                 if self.reporter:
-                    self.val_meter.update(**valmetrics)
+                    for split, vm in valmetrics.items():
+                        vm['split'] = split
+                        self.val_meter.update(**vm)
             else:
                 valmetrics = {}
             validation_loss.append(self.valLoss)
@@ -208,7 +210,8 @@ class Trainer:
                 if validation_loss[-1] >= validation_loss[-10]:
                     break
             if self.reporter:
-                self.epoch_meter.update(train_loss=eploss, **valmetrics)
+                self.update_meter(self.epoch_meter, valmetrics,
+                        train_loss=eploss)
                 # flush all meters at least once per epoch
                 self.epoch_meter.flush()
                 self.val_meter.flush()
@@ -234,7 +237,7 @@ class Trainer:
             epoch_time = datetime.now() - epoch_start
             print(f"Epoch time: {epoch_time}")
         if self.reporter:
-            torch.save(self.model.module.state_dict(), self.output_dir + f'/model_epoch{self._epoch}.pt')
+            torch.save(self.model.state_dict(), self.output_dir + f'/model_epoch{self._epoch}.pt')
         return eploss
 
     def batch_forward(self, X, Y, Ymask):
@@ -297,20 +300,53 @@ class Trainer:
         self.total_iters += 1
 
         if self.val_iters is not None and self.total_iters % self.val_iters == 0:
+            val_start = datetime.now()
             with nvtxblock("Val"):
                 valmetrics = self.validate()
+            elapsed_time = datetime.now() - val_start
             if self.reporter:
-                self.val_meter.update(**valmetrics)
+                print(f"Validation time: {elapsed_time}")
+                print(f"Learning rate: {self.lr}")
+                self.update_meter(self.val_meter, valmetrics)
 
         return loss.item()
 
+    def update_meter(self, meter, metrics, **addl_entries):
+        for split, splitdict in metrics.items():
+            splitloss = splitdict['loss']
+            for metric, findingmets in splitdict['metrics'].items():
+                meter.update(
+                    **findingmets,
+                    metric=metric,
+                    split=split,
+                    loss=splitloss,  # repeats the loss for each metric...
+                    **addl_entries,
+                )
+
     def validate(self):
+        """Return a nested dict describing metrics
+
+        {
+          val:
+            loss: 0.0309523509
+            metrics:
+              AUC:
+                Atelectasis: 0.758395039
+                Cardiomegaly: 0.8593293043
+                  ...
+              AveragePrecision:
+                Atelectasis: 0.534251225
+                Cardiomegaly: 0.753839493
+                  ...
+          test:
+            ...
+        }
+        """
         if self.reporter:
             print("Computing validation and test metrics")
-        val_start = datetime.now()
         self.model.eval()
         metrics = {}
-        splits = [('val', self.val_loader), ('test', self.test_loader)]
+        splits = [('val', self.val_loader)]#, ('test', self.test_loader)]
         for i, (split, loader) in enumerate(splits):
             valbar = loader
             if self.progress and self.reporter:
@@ -346,26 +382,28 @@ class Trainer:
                     Ypreds[task] = gathered[i]
                     Yactual[task] = gathered[i +
                             len(mimic_cxr_jpg.chexpert_labels)]
-            
-            metrics[split + '_loss'] = valloss/len(valbar)
+
+            metrics[split] = {'loss': valloss/len(valbar)}
+            #metrics[split + '_loss'] = valloss/len(valbar)
             if split == 'val':
                 self.valLoss =  valloss/len(valbar)
 
+            metrics[split]['metrics'] = {'AUC': {}, 'AveragePrecision': {}}
+
             for task in mimic_cxr_jpg.chexpert_labels:
-                Yp = Ypreds[task].cpu().numpy()
-                Ya = Yactual[task].cpu().numpy()
+                Yp = Ypreds[task]
+                Ya = Yactual[task]
 
                 ap = average_precision_score(Ya, Yp)
-                metrics[split + '_avg_prec_' + task] = ap
+                #metrics[split + '_avg_prec_' + task] = ap
+                metrics[split]['metrics']['AveragePrecision'][task] = ap
 
                 try:
-                    metrics[split + '_auc_' + task] = roc_auc_score(Ya, Yp)
+                    auc = roc_auc_score(Ya, Yp)
                 except ValueError:  # only one class predicted
-                    metrics[split + '_auc_' + task] = 0
+                    auc = 0
+                metrics[split]['metrics']['AUC'][task] = auc
         self.model.train()
-        if self.reporter:
-            print(f"Validation time: {datetime.now() - val_start}")
-            print(f"Learning rate: {self.lr}")
         return metrics
 
 
@@ -374,6 +412,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--datadir', '-d', default=mimic_cxr_jpg.topdir,
             help='Top-level directory of MIMIC-CXR-JPG dataset download.')
+    parser.add_argument(
+        "--dicom_id_file",
+        help="Restrict to only the dicom_ids in the 'dicom_id' column of a given CSV file.",
+    )
     parser.add_argument('--outputdir', '-o', required=True,
             help='Where to write outputs (trained weights, CSV of metrics)')
     parser.add_argument('--image-subdir', default='files',
@@ -381,6 +423,7 @@ if __name__ == '__main__':
     parser.add_argument('--arch', default='densenet121', choices=['densenet121',
         'densenet161', 'densenet169', 'densenet201', 'msd100','resnet50'],
             help='Densenet architecture.')
+    parser.add_argument('--feature_net_checkpoint', help='If given, load pretrained feature network from this checkpoint file.')
     parser.add_argument('--from-scratch', action='store_true',
             help='Do not initialize with ImageNet pretrained weights.')
     parser.add_argument('--epochs', default=100, type=int,
@@ -430,19 +473,29 @@ if __name__ == '__main__':
         if args.arch == 'msd100':
             model = MSDClassifier2d(1, len(mimic_cxr_jpg.chexpert_labels), depth=100, maxdil=10, width=1)
     else:
-        model = cxr_densenet(args.arch, pretrained=not args.from_scratch)
+        print(f"Initializing {args.arch} model with pretrained={not args.from_scratch}")
+        model = cxr_net(args.arch, pretrained=not args.from_scratch)
+
+    if args.feature_net_checkpoint is not None:
+        print(f"Loading feature network state_dict from {args.feature_net_checkpoint}")
+        sd = torch.load(args.feature_net_checkpoint, map_location='cpu')
+        model.features.load_state_dict(sd)
 
     nparams = sum([p.numel() for p in model.parameters()])
 
     if args.single_node_data_parallel and args.distributed_data_parallel:
         raise Exception("Max one of distributed or single-node data parallel can be requested.")
 
-    train, val, test = mimic_cxr_jpg.cv(image_subdir=args.image_subdir,
-            num_folds=args.num_folds, 
-            fold=args.fold, 
-            random_state=args.random_state, 
-            stratify=False,
-            label_method={l:'zeros_uncertain_nomask' for l in mimic_cxr_jpg.chexpert_labels})
+    train, val, test = mimic_cxr_jpg.cv(
+        args.num_folds,
+        args.fold,
+        datadir=args.datadir,
+        dicom_id_file=args.dicom_id_file,
+        image_subdir=args.image_subdir,
+        random_state=args.random_state,
+        stratify=False,
+        #label_method={l:'zeros_uncertain_nomask' for l in mimic_cxr_jpg.chexpert_labels},
+    )
     sampler = None
 
     if args.distributed_data_parallel:
@@ -473,20 +526,16 @@ if __name__ == '__main__':
             output_device=gpunum,
         )
 
-    try:
+    t = Trainer(model, train, args.epochs, args.outputdir,
+        batch_size=args.batch_size,
+        val_iters=args.val_iters,
+        val_data=val,
+        test_data=test,
+        progress=not args.hide_progress,
+        reporter=rank == 0,
+        device=device,
+        amp=args.amp,
+        distributed=args.distributed_data_parallel,
+    )
 
-        t = Trainer(model, train, args.epochs, args.outputdir,
-            batch_size=args.batch_size,
-            val_iters=args.val_iters,
-            val_data=val,
-            test_data=test,
-            progress=not args.hide_progress,
-            reporter=rank == 0,
-            device=device,
-            amp=args.amp,
-            distributed=args.distributed_data_parallel,
-        )
-
-        t.train()
-    finally:
-        dist.destroy_process_group()
+    t.train()
