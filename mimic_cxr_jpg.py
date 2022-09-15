@@ -53,11 +53,10 @@ def load_all_metadata(
     - mimic-cxr-reports.zip
     """
     data_dir = Path(data_dir)
-    print(data_dir)
 
     metadata = pd.read_csv(data_dir / "mimic-cxr-2.0.0-metadata.csv.gz")
     chexpert = pd.read_csv(data_dir / "mimic-cxr-2.0.0-chexpert.csv.gz")
-    splitpaths = pd.read_csv(data_dir / "splitpaths.csv.gz")
+    splitpaths = pd.read_csv(data_dir / "splitpaths.csv")
 
     meta = pd.merge(
         metadata,
@@ -277,9 +276,9 @@ class MIMICCXRJPGDataset(Dataset):
 
     def get_from_row(self, row):
         if self.load_activations:
-            # Replace extension with .pth
+            # Replace extension with .pt
             b, _ = os.path.splitext(row.path)
-            pthpath = b + ".pth"
+            pthpath = b + ".pt"
             im = torch.load(self.datadir / pthpath)
         else:
             im = Image.open(self.datadir / row.path)
@@ -438,6 +437,7 @@ class MIMICCXRJPGStudyDataset(Dataset):
             if i == 0:
                 labels.append(l)
                 labelmasks.append(m)
+
 
         if self.report_z is not None:
             # infer report path from row path
@@ -621,10 +621,18 @@ if __name__ == "__main__":
         help="If given, test loading reports into the metadata of each study. "
         "Only has effect if --return_studies also given.",
     )
+
+    parser.add_argument(
+        '--load_activations',
+        action='store_true',
+        help="If given, load saved activations instead of images",
+    )
+
     parser.add_argument(
         '--dicom_id_file',
         help="If given, restrict to only the dicom_ids in the 'dicom_id' column of a given CSV file",
     )
+
     args = parser.parse_args()
 
     print("Split type:", args.split_type)
@@ -634,6 +642,8 @@ if __name__ == "__main__":
         dicom_id_file=args.dicom_id_file,
         return_studies=args.return_studies,
         load_reports=args.load_reports,
+        load_activations =args.load_activations
+
     )
     # NOTE: as of 2022-09-13 CPython's zipfile breaks on
     # multithreaded reads
@@ -697,3 +707,4 @@ if __name__ == "__main__":
     print(prev_val)
     print("\nLabel prevalences (test):")
     print(prev_test)
+
