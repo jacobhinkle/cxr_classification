@@ -51,7 +51,6 @@ class attentionModel(nn.Module):
         self.num_heads = num_heads
         self.avgpool = nn.AdaptiveAvgPool2d((1,1))
         self.self_attn = nn.MultiheadAttention(self.embed_dim, self.num_heads)
-        self.maxpool = nn.MaxPool2d((1,2))
         self.classifier = nn.Sequential(nn.Linear(1024, 512),
                                         nn.ReLU(),
                                         nn.Linear(512, 256),
@@ -238,55 +237,18 @@ class Trainer:
         Y = Y.type(torch.float32).to(device)
 
         prediction = []
-        losses = []
-    
-        for i in range(len(lengths)):
-            weightsum = Ymask[i].sum()
+        offset = 0
+        loss = 0
 
-            if self.distributed:
-                # start reducing the number of weights in background early
-                with torch.no_grad():
-                    weightsync_hdl = dist.all_reduce(weightsum, async_op=True)
+        for length, label in zip(lengths, Y): 
+            studims = X[offset:offset + length]
+            pred = self.model(studims)
+            prediction.append(pred.mean(dim=0))
+            loss = loss + self.criterion(pred.mean(dim=0), label)
+            offset += length
 
-            if lengths[i] == 1:     # if we have only one image in the study
-                preds = self.model(X[i].unsqueeze(0))
-                prediction.append(preds)
-                bce = self.criterion(preds, Y[i].unsqueeze(0))
-                if self.distributed:
-                    weightsync_hdl.wait()
-                weightsum = weightsum.item()
-                if weightsum == 0:
-                    # if _reduced_ weightsum is zero, then entire minibatch (every
-                    # microbatch) holds no actual labels, and we can skip this
-                    # iteration. Otherwise, all ranks must continue to participate in
-                    # order to avoid a deadlock on the backward pass.
-                    return
-                loss = (bce * Ymask[i]).sum() / weightsum
-                losses.append(loss)
-
-            else:                  # if we have multiple images in the study
-                pred = []
-                for j in range(lengths[i]):
-                    preds = self.model(X[i+j].unsqueeze(0))
-                    pred.append(preds)
-                pred = torch.stack((pred))
-                pred = pred.mean(dim=0) #average predictions for multiple images
-                prediction.append(pred)
-                bce = self.criterion(pred, Y[i].unsqueeze(0))
-                if self.distributed:
-                    weightsync_hdl.wait()
-                weightsum = weightsum.item()
-                if weightsum == 0:
-                    # if _reduced_ weightsum is zero, then entire minibatch (every
-                    # microbatch) holds no actual labels, and we can skip this
-                    # iteration. Otherwise, all ranks must continue to participate in
-                    # order to avoid a deadlock on the backward pass.
-                    return
-                loss = (bce * Ymask[i]).sum() / weightsum
-                losses.append(loss)
-
-        loss = torch.stack((losses)).mean()
-        preds = torch.stack((prediction)).squeeze(1)
+        loss = loss.mean()
+        preds = torch.stack((prediction))
 
         return preds,loss, X, Y, Ymask
 
@@ -324,48 +286,14 @@ class Trainer:
         self.total_iters += 1
 
         if self.val_iters is not None and self.total_iters % self.val_iters == 0:
-            val_start = datetime.now()
             with nvtxblock("Val"):
                 valmetrics = self.validate()
-            elapsed_time = datetime.now() - val_start
             if self.reporter:
-                print(f"Validation time: {elapsed_time}")
-                print(f"Learning rate: {self.lr}")
-                self.update_meter(self.val_meter, valmetrics)
+                self.val_meter.update(**valmetrics)
 
         return loss.item()
 
-    def update_meter(self, meter, metrics, **addl_entries):
-        for split, splitdict in metrics.items():
-            splitloss = splitdict['loss']
-            for metric, findingmets in splitdict['metrics'].items():
-                meter.update(
-                    **findingmets,
-                    metric=metric,
-                    split=split,
-                    loss=splitloss,  # repeats the loss for each metric...
-                    **addl_entries,
-                )
-
     def validate(self):
-        """Return a nested dict describing metrics
-
-        {
-          val:
-            loss: 0.0309523509
-            metrics:
-              AUC:
-                Atelectasis: 0.758395039
-                Cardiomegaly: 0.8593293043
-                  ...
-              AveragePrecision:
-                Atelectasis: 0.534251225
-                Cardiomegaly: 0.753839493
-                  ...
-          test:
-            ...
-        }
-        """
         if self.reporter:
             print("Computing validation and test metrics")
         self.model.eval()
@@ -407,8 +335,8 @@ class Trainer:
                     Yactual[task] = gathered[i +
                             len(mimic_cxr_jpg.chexpert_labels)]
 
-            metrics[split] = {'loss': valloss/len(valbar)}
-            #metrics[split + '_loss'] = valloss/len(valbar)
+            #metrics[split] = {'loss': valloss/len(valbar)}
+            metrics[split + '_loss'] = valloss/len(valbar)
             if split == 'val':
                 self.valLoss =  valloss/len(valbar)
 
