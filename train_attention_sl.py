@@ -49,9 +49,11 @@ class attentionModel(nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
-        self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        #self.avgpool = nn.AdaptiveAvgPool2d((1,1))
         self.self_attn = nn.MultiheadAttention(self.embed_dim, self.num_heads)
-        self.classifier = nn.Sequential(nn.Linear(1024, 512),
+        self.classifier = nn.Sequential(nn.Linear(65600, 1024),
+                                        nn.ReLU(),
+                                        nn.Linear(1024, 512),
                                         nn.ReLU(),
                                         nn.Linear(512, 256),
                                         nn.ReLU(),
@@ -62,15 +64,16 @@ class attentionModel(nn.Module):
 
     def forward(self, x):
         #pooling
-        pooled_activation = self.avgpool(x) # size (L,1024,1,1)
-        pooled_activation = pooled_activation.squeeze(-1).squeeze(-1) # size (L,1024)
-        pooled_activation = pooled_activation.unsqueeze(0) # size (1,L,1024) , N=1, L=15, E=1024
+        #pooled_activation = self.avgpool(x) # size (L,1024,1,1)
+        #pooled_activation = pooled_activation.squeeze(-1).squeeze(-1) # size (L,1024)
+        #pooled_activation = pooled_activation.unsqueeze(0) # size (1,L,1024) , N=1, L=15, E=1024
 
         #self attention
-        attn_output, _ = self.self_attn(pooled_activation, pooled_activation, pooled_activation) # attn_output shape (N,L,E) => (1,15,1024)
+        attn_output, _ = self.self_attn(x, x, x) # attn_output shape (N,L,E), (b,1025,64) in pur case where b is the batch size 
+        attn_output = attn_output.reshape(attn_output.shape[0], attn_output.shape[1]*attn_output.shape[2])
 
         #Linear layer
-        output = self.classifier(attn_output.squeeze(0)) 
+        output = self.classifier(attn_output) 
 
         return output
 
@@ -233,18 +236,26 @@ class Trainer:
 
     def batch_forward(self, X, Y, Ymask, lengths, meta):
         Ymask = Ymask.to(device)
-        X = X.type(torch.float32).to(device)
+        X = X.type(torch.float32).to(device) # shape (b,1024,8,8), where b is batch size
         Y = Y.type(torch.float32).to(device)
+
+        # Convert 4d to 3d, embed dim will be 8*8=64 since we have 8*8 features/patches. 
+        X = X.reshape(X.shape[0], X.shape[1], X.shape[2]*X.shape[3])
+        # Add [CLS] token
+        cls_token = nn.Parameter(torch.randn(1,1,X.shape[2])).to(device)
+        cls_token = cls_token.repeat(X.shape[0],1,1)
+        X_new = torch.cat([X, cls_token], dim=1) #shape (b,1025,64)
+        del cls_token 
 
         prediction = []
         offset = 0
         loss = 0
 
         for length, label in zip(lengths, Y): 
-            studims = X[offset:offset + length]
+            studims = X_new[offset:offset + length]
             pred = self.model(studims)
-            prediction.append(pred.mean(dim=0))
-            loss = loss + self.criterion(pred.mean(dim=0), label)
+            prediction.append(pred.max(dim=0).values)
+            loss = loss + self.criterion(pred.max(dim=0).values, label)
             offset += length
 
         loss = loss.mean()
@@ -384,6 +395,16 @@ if __name__ == "__main__":
         help="Do not initialize with ImageNet pretrained weights.",
     )
     parser.add_argument(
+        "--embed-dim", 
+        "-e",
+        default=64, type=int, help="embed_dim for the MHA model"
+    )
+    parser.add_argument(
+        "--num-heads", 
+        "-n",
+        default=8, type=int, help="Number of parallel heads for the MHA model"
+    )
+    parser.add_argument(
         "--epochs", default=100, type=int, help="Number of epochs to train for."
     )
     parser.add_argument(
@@ -438,7 +459,7 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = False
     np.random.seed(0)
 
-    model = attentionModel(1024,8)
+    model = attentionModel(args.embed_dim,args.num_heads)
 
     train, val, test = mimic_cxr_jpg.cv(
         datadir=args.datadir,
