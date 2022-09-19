@@ -249,16 +249,16 @@ class Trainer:
 
         prediction = []
         offset = 0
-        loss = 0
+        losses = []
 
         for length, label in zip(lengths, Y): 
             studims = X_new[offset:offset + length]
             pred = self.model(studims)
             prediction.append(pred.max(dim=0).values)
-            loss = loss + self.criterion(pred.max(dim=0).values, label)
+            losses.append(self.criterion(pred.max(dim=0).values, label).mean())
             offset += length
 
-        loss = loss.mean()
+        loss = torch.stack((losses)).mean()
         preds = torch.stack((prediction))
 
         return preds,loss, X, Y, Ymask
