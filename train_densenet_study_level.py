@@ -238,19 +238,16 @@ class Trainer:
         offset = 0
         losses = []
 
+        preds = self.model(X)
         for length, label in zip(lengths, Y): 
-            studims = X[offset:offset + length]
-            pred = self.model(studims)
-            pred = pred.max(dim=0).values
+            studpred = preds[offset:offset + length]
+            pred = studpred.max(dim=0).values
             prediction.append(pred)
-            bce = self.criterion(pred, label)
-            losses.append(bce.mean())
-            offset += length
 
-        loss = torch.stack((losses)).mean()
-        preds = torch.stack((prediction))
+        prediction = torch.stack((prediction))
+        loss = self.criterion(prediction,Y).mean()
 
-        return preds,loss, X, Y, Ymask
+        return prediction, loss, X, Y, Ymask
 
     def iteration(self, *batch):
         self.optim.zero_grad()
@@ -484,7 +481,7 @@ if __name__ == "__main__":
     # We do not use local_rank since we are now using -r6 -a1 -g1 -c7 on summit
     gpunum = local_rank
 
-    device = torch.device("cuda", gpunum)
+    device = torch.device("cuda:2")
     model = model.to(device)
 
     if args.single_node_data_parallel:
