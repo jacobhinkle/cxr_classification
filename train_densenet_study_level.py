@@ -481,7 +481,7 @@ if __name__ == "__main__":
     # We do not use local_rank since we are now using -r6 -a1 -g1 -c7 on summit
     gpunum = local_rank
 
-    device = torch.device("cuda:2")
+    device = torch.device("cuda", gpunum)
     model = model.to(device)
 
     if args.single_node_data_parallel:
@@ -498,7 +498,6 @@ if __name__ == "__main__":
         )
 
     try:
-        torch.autograd.set_detect_anomaly(True)
 
         t = Trainer(
             model,
