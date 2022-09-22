@@ -72,7 +72,7 @@ class attentionModel(nn.Module):
 
         #self attention
         attn_output, _ = self.self_attn(X, X, X) # shape (1, b*64 + 1, 1024)
-        cls_output = attn_output[:,-1,:] #get the 65th output value which is the output of the [cls] token, shape (1,1024)
+        cls_output = attn_output[:,-1,:] #get the last output value which is the output of the [cls] token, shape (1,1024)
         #cls_output = attn_output.mean(dim=1)
 
         #Linear layer
