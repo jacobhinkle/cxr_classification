@@ -49,7 +49,7 @@ class attentionModel(nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
-        self.cls_token = nn.Parameter(torch.randn(1,1024,1))
+        self.cls_token = nn.Parameter(torch.randn(1,1,1024))
         self.self_attn = nn.MultiheadAttention(self.embed_dim, self.num_heads)
         self.classifier = nn.Sequential(nn.Linear(1024, 512),
                                         nn.ReLU(),
@@ -61,19 +61,22 @@ class attentionModel(nn.Module):
                                         )
 
     def forward(self, x):
-        #Adding [cls] token
-        cls_token = self.cls_token.repeat(x.shape[0],1,1)
-        X = torch.cat([x, cls_token], dim=2) #shape (b,1024,65)
-        # change shape to (b,65,1024) for the MHA layer
-        X = torch.permute(X,(0,2,1))     
+        
+        # change shape to (b,64,1024)
+        X = torch.permute(x,(0,2,1)) 
+        X = X.reshape(X.shape[0]*X.shape[1], X.shape[2])  
+        X = X.unsqueeze(0)  # (1,b*64,1024), b is number of images for a study i.e. b*64 is the sequence length
+
+        cls_token = self.cls_token.repeat(X.shape[0],1,1)
+        X = torch.cat([X, cls_token], dim=1) #shape (1, b*65 + 1, 1024)
 
         #self attention
-        attn_output, _ = self.self_attn(X, X, X) # attn_output shape (N,L,E), (b,1025,64) in pur case where b is the batch size 
-        #cls_output = attn_output[:,64,:] #get the 65th output value which is the output of the [cls] token, shape (b,1024)
-        cls_output = attn_output.mean(dim=1)
+        attn_output, _ = self.self_attn(X, X, X) # shape (1, b*65 + 1, 1024)
+        cls_output = attn_output[:,-1,:] #get the 65th output value which is the output of the [cls] token, shape (1,1024)
+        #cls_output = attn_output.mean(dim=1)
 
         #Linear layer
-        output = self.classifier(cls_output) # shape (b,1024)
+        output = self.classifier(cls_output) # shape (1,14)
 
         return output
 
@@ -244,16 +247,14 @@ class Trainer:
 
         prediction = []
         offset = 0
-        losses = []
-
-        preds = self.model(X)
 
         for length, label in zip(lengths, Y): 
-            studpred = preds[offset:offset + length]
-            prediction.append(studpred.max(dim=0).values)
+            studim = X[offset:offset + length]
+            pred = self.model(studim) # will always be (1,14)
+            prediction.append(pred)  
             offset += length
 
-        prediction = torch.stack(prediction)
+        prediction = torch.stack(prediction).squeeze(1)
         bce = self.criterion(prediction,Y)
         loss = bce.mean()
 
