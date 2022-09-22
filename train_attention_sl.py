@@ -49,11 +49,9 @@ class attentionModel(nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
-        #self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        self.cls_token = nn.Parameter(torch.randn(1,1024,1))
         self.self_attn = nn.MultiheadAttention(self.embed_dim, self.num_heads)
-        self.classifier = nn.Sequential(nn.Linear(65600, 1024),
-                                        nn.ReLU(),
-                                        nn.Linear(1024, 512),
+        self.classifier = nn.Sequential(nn.Linear(1024, 512),
                                         nn.ReLU(),
                                         nn.Linear(512, 256),
                                         nn.ReLU(),
@@ -63,17 +61,19 @@ class attentionModel(nn.Module):
                                         )
 
     def forward(self, x):
-        #pooling
-        #pooled_activation = self.avgpool(x) # size (L,1024,1,1)
-        #pooled_activation = pooled_activation.squeeze(-1).squeeze(-1) # size (L,1024)
-        #pooled_activation = pooled_activation.unsqueeze(0) # size (1,L,1024) , N=1, L=15, E=1024
+        #Adding [cls] token
+        cls_token = self.cls_token.repeat(x.shape[0],1,1)
+        X = torch.cat([x, cls_token], dim=2) #shape (b,1024,65)
+        # change shape to (b,65,1024) for the MHA layer
+        X = torch.permute(X,(0,2,1))     
 
         #self attention
-        attn_output, _ = self.self_attn(x, x, x) # attn_output shape (N,L,E), (b,1025,64) in pur case where b is the batch size 
-        attn_output = attn_output.reshape(attn_output.shape[0], attn_output.shape[1]*attn_output.shape[2])
+        attn_output, _ = self.self_attn(X, X, X) # attn_output shape (N,L,E), (b,1025,64) in pur case where b is the batch size 
+        #cls_output = attn_output[:,64,:] #get the 65th output value which is the output of the [cls] token, shape (b,1024)
+        cls_output = attn_output.mean(dim=1)
 
         #Linear layer
-        output = self.classifier(attn_output) 
+        output = self.classifier(cls_output) # shape (b,1024)
 
         return output
 
@@ -125,7 +125,7 @@ class Trainer:
         test_data=None,
         distributed=False,
         amp=False,
-        lr=0.0005,
+        lr=0.0001,
         device="cuda",
         progress=False,
         reporter=True,
@@ -171,7 +171,7 @@ class Trainer:
         self.criterion = nn.BCEWithLogitsLoss(reduction='none')
 
         self.optim = optim.Adam(self.model.parameters(), lr=self.lr)
-        # self.optim = optim.SGD(self.model.parameters(), lr=self.lr)
+        #self.optim = optim.SGD(self.model.parameters(), lr=self.lr)
 
         self.total_iters = 0
         self.scaler = torch.cuda.amp.GradScaler()
@@ -241,27 +241,23 @@ class Trainer:
 
         # Convert 4d to 3d, embed dim will be 8*8=64 since we have 8*8 features/patches. 
         X = X.reshape(X.shape[0], X.shape[1], X.shape[2]*X.shape[3])
-        # Add [CLS] token
-        cls_token = nn.Parameter(torch.randn(1,1,X.shape[2])).to(device)
-        cls_token = cls_token.repeat(X.shape[0],1,1)
-        X_new = torch.cat([X, cls_token], dim=1) #shape (b,1025,64)
-        del cls_token 
 
         prediction = []
         offset = 0
         losses = []
 
+        preds = self.model(X)
+
         for length, label in zip(lengths, Y): 
-            studims = X_new[offset:offset + length]
-            pred = self.model(studims)
-            prediction.append(pred.max(dim=0).values)
-            losses.append(self.criterion(pred.max(dim=0).values, label).mean())
+            studpred = preds[offset:offset + length]
+            prediction.append(studpred.max(dim=0).values)
             offset += length
 
-        loss = torch.stack((losses)).mean()
-        preds = torch.stack((prediction))
+        prediction = torch.stack(prediction)
+        bce = self.criterion(prediction,Y)
+        loss = bce.mean()
 
-        return preds,loss, X, Y, Ymask
+        return prediction, loss, X, Y, Ymask
 
     def iteration(self, *batch):
         self.optim.zero_grad()
@@ -397,7 +393,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--embed-dim", 
         "-e",
-        default=64, type=int, help="embed_dim for the MHA model"
+        default=1024, type=int, help="embed_dim for the MHA model"
     )
     parser.add_argument(
         "--num-heads", 
