@@ -68,10 +68,10 @@ class attentionModel(nn.Module):
         X = X.unsqueeze(0)  # (1,b*64,1024), b is number of images for a study i.e. b*64 is the sequence length
 
         cls_token = self.cls_token.repeat(X.shape[0],1,1)
-        X = torch.cat([X, cls_token], dim=1) #shape (1, b*65 + 1, 1024)
+        X = torch.cat([X, cls_token], dim=1) #shape (1, b*64 + 1, 1024)
 
         #self attention
-        attn_output, _ = self.self_attn(X, X, X) # shape (1, b*65 + 1, 1024)
+        attn_output, _ = self.self_attn(X, X, X) # shape (1, b*64 + 1, 1024)
         cls_output = attn_output[:,-1,:] #get the 65th output value which is the output of the [cls] token, shape (1,1024)
         #cls_output = attn_output.mean(dim=1)
 
