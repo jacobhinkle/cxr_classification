@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import torchvision.models.resnet as tvresnet
 from tqdm import tqdm
+import torch.nn.functional as F
 
 import mimic_cxr_jpg
 from torch_nlp_models.meters import CSVMeter
@@ -40,37 +41,20 @@ def nvtxblock(desc):
     finally:
         torch.cuda.nvtx.range_pop()
 
-def cxr_net(
-        arch='densenet121',
-        pretrained=False,
-        num_classes=len(mimic_cxr_jpg.chexpert_labels),
+class activation_to_pred(nn.Module):
+    def __init__(
+        self
     ):
-    if 'densenet' in arch:
+        super().__init__()
+        self.classifier = nn.Linear(1024, 14)
 
-        if arch == 'densenet121':
-            c = densenet.densenet121
-            num_init_features = 64
-        elif arch == 'densenet161':
-            c = densenet.densenet161
-            num_init_features = 96
-        elif arch == 'densenet169':
-            c = densenet.densenet169
-            num_init_features = 64
-        elif arch == 'densenet201':
-            c = densenet.densenet201
-            num_init_features = 64
-        else:
-            raise ValueError('arch must be one of: densenet121, densenet161, densenet169, densenet201')
-
-        mod = c(pretrained=pretrained, num_classes=1000)
-        # modify first conv to take proper input_channels
-        oldconv = mod.features.conv0
-        newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
-        newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
-        mod.features._modules['conv0'] = newconv
-        mod.classifier = nn.Linear(mod.classifier.in_features, num_classes)
-    
-    return mod
+    def forward(self, x):
+        
+        out = F.relu(x, inplace=True)
+        out = F.adaptive_avg_pool2d(out, (1, 1))
+        out = torch.flatten(out, 1)
+        out = self.classifier(out)
+        return out
 
 def all_gather_vectors(tensors, *, device="cuda"):
     """
@@ -233,18 +217,19 @@ class Trainer:
         Ymask = Ymask.to(device)
         X = X.type(torch.float32).to(device) 
         Y = Y.type(torch.float32).to(device)
+        Y[torch.isnan(Y)] = 0 #converting NaN to zero 
+        Y[Y == -1] = 0 #converting -1 to zero
 
         prediction = []
         offset = 0
-        losses = []
-
         preds = self.model(X)
-        for length, label in zip(lengths, Y): 
-            studpred = preds[offset:offset + length]
-            pred = studpred.max(dim=0).values
-            prediction.append(pred)
 
-        prediction = torch.stack((prediction))
+        for l in lengths:
+            studpred = preds[offset:offset+l]
+            prediction.append(studpred.mean(0).unsqueeze(0))
+            offset += l
+
+        prediction = torch.cat(prediction)
         loss = self.criterion(prediction,Y).mean()
 
         return prediction, loss, X, Y, Ymask
@@ -449,7 +434,7 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = False
     np.random.seed(0)
 
-    model = cxr_net('densenet121', pretrained=True)
+    model = activation_to_pred()
 
     train, val, test = mimic_cxr_jpg.cv(
         datadir=args.datadir,
@@ -460,6 +445,7 @@ if __name__ == "__main__":
         stratify=False,
         return_studies=True,
         dataloaders=True,
+        load_activations=True,
         dl_kwargs=dict(
             batch_size=args.batch_size,
             num_workers=12,
