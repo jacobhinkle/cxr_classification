@@ -51,14 +51,8 @@ class attentionModel(nn.Module):
         self.num_heads = num_heads
         self.cls_token = nn.Parameter(torch.randn(1,1,1024))
         self.self_attn = nn.MultiheadAttention(self.embed_dim, self.num_heads)
-        self.classifier = nn.Sequential(nn.Linear(1024, 512),
-                                        nn.ReLU(),
-                                        nn.Linear(512, 256),
-                                        nn.ReLU(),
-                                        nn.Linear(256, 128),
-                                        nn.ReLU(),
-                                        nn.Linear(128, 14),
-                                        )
+        self.classifier = nn.Linear(1024, 14)
+
 
     def forward(self, x):
         
@@ -171,7 +165,7 @@ class Trainer:
                 os.path.join(self.output_dir, "iter_metrics.csv")
             )
 
-        self.criterion = nn.BCEWithLogitsLoss(reduction='none')
+        self.criterion = nn.BCEWithLogitsLoss()
 
         self.optim = optim.Adam(self.model.parameters(), lr=self.lr)
         #self.optim = optim.SGD(self.model.parameters(), lr=self.lr)
@@ -242,10 +236,11 @@ class Trainer:
         X = X.type(torch.float32).to(device) # shape (b,1024,8,8), where b is batch size
         Y = Y.type(torch.float32).to(device)
 
-        # Convert 4d to 3d, embed dim will be 8*8=64 since we have 8*8 features/patches. 
+        # Convert 4d to 3d, sequence length will be 8*8=64 since we have 8*8 features/patches. 
         X = X.reshape(X.shape[0], X.shape[1], X.shape[2]*X.shape[3])
 
         prediction = []
+        loss = []
         offset = 0
 
         for length, label in zip(lengths, Y): 
@@ -254,9 +249,8 @@ class Trainer:
             prediction.append(pred)  
             offset += length
 
-        prediction = torch.stack(prediction).squeeze(1)
-        bce = self.criterion(prediction,Y)
-        loss = bce.mean()
+        prediction = torch.cat(prediction)
+        loss = self.criterion(prediction,Y)
 
         return prediction, loss, X, Y, Ymask
 
