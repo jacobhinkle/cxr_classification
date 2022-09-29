@@ -48,6 +48,7 @@ def cxr_net(
                         layermods = dict(layer.named_modules())
                         # conv1 is a 1x1 that goes to bottleneck. conv2 is a 3x3
                         layermods['conv2'].dilation = l
+                        layermods['conv2'].padding = l
                         print(f'Block {i} Layer {l} conv2.dilation={l}')
                         l += 1
 
