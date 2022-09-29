@@ -27,6 +27,7 @@
           pytorchWithCuda
           scikit-learn
           scipy
+          #torchinfo  # currently does not build on nix 22.05?? as of 2022-09-29
           torchvision
           tqdm
         ];
