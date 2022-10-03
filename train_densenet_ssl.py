@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 import mimic_cxr_jpg
 from meters import CSVMeter
+from networks import cxr_feature_net
 
 from torchvision.models import resnet
 from torchvision.models import densenet
@@ -39,43 +40,6 @@ def nvtxblock(desc):
         yield
     finally:
         torch.cuda.nvtx.range_pop()
-
-
-def cxr_feature_net(
-    arch="densenet121",
-    pretrained=False,
-):
-    if "densenet" in arch:
-
-        if arch == "densenet121":
-            c = densenet.densenet121
-            num_init_features = 64
-        elif arch == "densenet161":
-            c = densenet.densenet161
-            num_init_features = 96
-        elif arch == "densenet169":
-            c = densenet.densenet169
-            num_init_features = 64
-        elif arch == "densenet201":
-            c = densenet.densenet201
-            num_init_features = 64
-        else:
-            raise ValueError(
-                "arch must be one of: densenet121, densenet161, densenet169, densenet201"
-            )
-
-        mod = c(pretrained=pretrained, num_classes=1000).features
-        # modify first conv to take proper input_channels
-        oldconv = mod.conv0
-        newconv = nn.Conv2d(
-            1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False
-        )
-        newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
-        mod._modules["conv0"] = newconv
-    else:
-        raise ValueError(f"Unrecognized model architecture: {arch}")
-
-    return mod
 
 
 def all_gather_vectors(tensors, *, device="cuda"):

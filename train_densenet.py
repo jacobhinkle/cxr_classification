@@ -6,15 +6,11 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-import torchvision.models.resnet as tvresnet
 from tqdm import tqdm
 
 import mimic_cxr_jpg
 from meters import CSVMeter
-
-from torchvision.models import resnet
-from torchvision.models import densenet
-#from affine_augmentation import densenet
+from networks import cxr_net
 
 from datetime import datetime
 import os
@@ -28,54 +24,6 @@ def nvtxblock(desc):
     finally:
         torch.cuda.nvtx.range_pop()
 
-def cxr_net(
-        arch='densenet121',
-        pretrained=False,
-        num_classes=len(mimic_cxr_jpg.chexpert_labels),
-    ):
-    if 'densenet' in arch:
-
-        if arch == 'densenet121':
-            c = densenet.densenet121
-            num_init_features = 64
-        elif arch == 'densenet161':
-            c = densenet.densenet161
-            num_init_features = 96
-        elif arch == 'densenet169':
-            c = densenet.densenet169
-            num_init_features = 64
-        elif arch == 'densenet201':
-            c = densenet.densenet201
-            num_init_features = 64
-        else:
-            raise ValueError('arch must be one of: densenet121, densenet161, densenet169, densenet201')
-
-        mod = c(pretrained=pretrained, num_classes=1000)
-        # modify first conv to take proper input_channels
-        oldconv = mod.features.conv0
-        newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
-        newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
-        mod.features._modules['conv0'] = newconv
-        mod.classifier = nn.Linear(mod.classifier.in_features, num_classes)
-    
-    elif 'resnet' in arch:
-        if arch == 'resnet50':
-            c = resnet.resnet50(pretrained=True,replace_stride_with_dilation=[False, True, True])
-            num_init_features = 64
-        elif arch == 'resnet101':
-            c = resnet.resnet101
-            num_init_features = 64
-        else:
-            raise ValueError('arch must be one of: resnet50, resnet101')
-
-        mod = c
-        # modify first conv to take proper input_channels
-        oldconv = mod.conv1
-        newconv = nn.Conv2d(1, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)
-        newconv.weight.data = oldconv.weight.data.sum(dim=1, keepdims=True)
-        mod.conv1 = newconv
-        mod.fc = nn.Linear(512 * 4, num_classes)
-    return mod
 
 def all_gather_vectors(tensors, *, device='cuda'):
     """
@@ -266,7 +214,7 @@ class Trainer:
         bce = self.criterion(preds, Y)
         loss = (bce * Ymask).sum() / weightsum
         return preds, bce, loss, X, Y, Ymask
-    
+
     def iteration(self, *batch):
         self.optim.zero_grad()
 
@@ -346,7 +294,7 @@ class Trainer:
             print("Computing validation and test metrics")
         self.model.eval()
         metrics = {}
-        splits = [('val', self.val_loader)]#, ('test', self.test_loader)]
+        splits = [('val', self.val_loader), ('test', self.test_loader)]
         for i, (split, loader) in enumerate(splits):
             valbar = loader
             if self.progress and self.reporter:
@@ -508,7 +456,7 @@ if __name__ == '__main__':
         rank = 0
 
     # We do not use local_rank since we are now using -r6 -a1 -g1 -c7 on summit
-    gpunum = local_rank 
+    gpunum = local_rank
 
     device = torch.device('cuda', gpunum)
     model = model.to(device)

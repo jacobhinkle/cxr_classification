@@ -15,17 +15,11 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-import torchvision.models.resnet as tvresnet
 from tqdm import tqdm
 import torch.nn.functional as F
 
 import mimic_cxr_jpg
 from torch_nlp_models.meters import CSVMeter
-
-from torchvision.models import resnet
-from torchvision.models import densenet
-
-# from affine_augmentation import densenet
 
 from datetime import datetime
 import os
@@ -49,7 +43,7 @@ class activation_to_pred(nn.Module):
         self.classifier = nn.Linear(1024, 14)
 
     def forward(self, x):
-        
+
         out = F.relu(x, inplace=True)
         out = F.adaptive_avg_pool2d(out, (1, 1))
         out = torch.flatten(out, 1)
@@ -215,9 +209,9 @@ class Trainer:
 
     def batch_forward(self, X, Y, Ymask, lengths, meta):
         Ymask = Ymask.to(device)
-        X = X.type(torch.float32).to(device) 
+        X = X.type(torch.float32).to(device)
         Y = Y.type(torch.float32).to(device)
-        Y[torch.isnan(Y)] = 0 #converting NaN to zero 
+        Y[torch.isnan(Y)] = 0 #converting NaN to zero
         Y[Y == -1] = 0 #converting -1 to zero
 
         prediction = []
@@ -355,10 +349,6 @@ if __name__ == "__main__":
         required=True,
         help="Where to write outputs (trained weights, CSV of metrics)",
     )
-    parser.add_argument('--arch', default='densenet121', choices=['densenet121',
-        'densenet161', 'densenet169', 'densenet201', 'msd100','resnet50'],
-            help='Densenet architecture.'
-    )
     parser.add_argument(
         "--image-subdir",
         default="files",
@@ -370,12 +360,12 @@ if __name__ == "__main__":
         help="Do not initialize with ImageNet pretrained weights.",
     )
     parser.add_argument(
-        "--embed-dim", 
+        "--embed-dim",
         "-e",
         default=64, type=int, help="embed_dim for the MHA model"
     )
     parser.add_argument(
-        "--num-heads", 
+        "--num-heads",
         "-n",
         default=8, type=int, help="Number of parallel heads for the MHA model"
     )
