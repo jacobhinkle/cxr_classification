@@ -49,25 +49,28 @@ class attentionModel(nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
-        self.cls_token = nn.Parameter(torch.randn(1,1,1024))
+        self.reducer = nn.Linear(1024,32)
+        #self.cls_token = nn.Parameter(torch.randn(1,1,1024))
         self.self_attn = nn.MultiheadAttention(self.embed_dim, self.num_heads)
-        self.classifier = nn.Linear(1024, 14)
+        self.classifier = nn.Linear(32, 14)
 
 
     def forward(self, x):
         
         # change shape to (b,64,1024)
-        X = torch.permute(x,(0,2,1)) 
+        X = torch.permute(x,(0,2,1))
+        X = self.reducer(X)
+        #X = X.mean(dim=1) #shape(b,1024) 
         X = X.reshape(X.shape[0]*X.shape[1], X.shape[2])  
         X = X.unsqueeze(0)  # (1,b*64,1024), b is number of images for a study i.e. b*64 is the sequence length
 
-        cls_token = self.cls_token.repeat(X.shape[0],1,1)
-        X = torch.cat([X, cls_token], dim=1) #shape (1, b*64 + 1, 1024)
+        #cls_token = self.cls_token.repeat(X.shape[0],1,1)
+        #X = torch.cat([X, cls_token], dim=1) #shape (1, b*64 + 1, 1024)
 
         #self attention
         attn_output, _ = self.self_attn(X, X, X) # shape (1, b*64 + 1, 1024)
-        cls_output = attn_output[:,-1,:] #get the last output value which is the output of the [cls] token, shape (1,1024)
-        #cls_output = attn_output.mean(dim=1)
+        #cls_output = attn_output[:,-1,:] #get the last output value which is the output of the [cls] token, shape (1,1024)
+        cls_output = attn_output.mean(dim=1)
 
         #Linear layer
         output = self.classifier(cls_output) # shape (1,14)
@@ -122,7 +125,7 @@ class Trainer:
         test_data=None,
         distributed=False,
         amp=False,
-        lr=0.0001,
+        lr=0.001,
         device="cuda",
         progress=False,
         reporter=True,
@@ -388,7 +391,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--embed-dim", 
         "-e",
-        default=1024, type=int, help="embed_dim for the MHA model"
+        default=32, type=int, help="embed_dim for the MHA model"
     )
     parser.add_argument(
         "--num-heads", 
@@ -441,6 +444,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Use torch.distributed for multi-node parallelism",
     )
+    parser.add_argument(
+        "--dicom_id_file",
+        help="Restrict to only the dicom_ids in the 'dicom_id' column of a given CSV file. "
+        "This is required since we must restrict to PA+Lateral studies only",
+    )
     args = parser.parse_args()
 
     # Reproducibility
@@ -462,6 +470,7 @@ if __name__ == "__main__":
         return_studies=True,
         dataloaders=True,
         load_activations=True,
+        dicom_id_file=args.dicom_id_file,
         dl_kwargs=dict(
             batch_size=args.batch_size,
             num_workers=12,
