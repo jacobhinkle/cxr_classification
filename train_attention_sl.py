@@ -49,10 +49,10 @@ class attentionModel(nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
-        self.reducer = nn.Linear(1024,32)
+        self.reducer = nn.Linear(1024,64)
         #self.cls_token = nn.Parameter(torch.randn(1,1,1024))
-        self.self_attn = nn.MultiheadAttention(self.embed_dim, self.num_heads)
-        self.classifier = nn.Linear(32, 14)
+        self.self_attn = nn.MultiheadAttention(self.embed_dim, self.num_heads, batch_first=True)
+        self.classifier = nn.Linear(64, 14)
 
 
     def forward(self, x):
@@ -68,14 +68,14 @@ class attentionModel(nn.Module):
         #X = torch.cat([X, cls_token], dim=1) #shape (1, b*64 + 1, 1024)
 
         #self attention
-        attn_output, _ = self.self_attn(X, X, X) # shape (1, b*64 + 1, 1024)
+        attn_output, attn_weight = self.self_attn(X, X, X) # shape (1, b*64 + 1, 1024)
         #cls_output = attn_output[:,-1,:] #get the last output value which is the output of the [cls] token, shape (1,1024)
         cls_output = attn_output.mean(dim=1)
 
         #Linear layer
         output = self.classifier(cls_output) # shape (1,14)
 
-        return output
+        return output, attn_weight
 
 def all_gather_vectors(tensors, *, device="cuda"):
     """
@@ -125,7 +125,7 @@ class Trainer:
         test_data=None,
         distributed=False,
         amp=False,
-        lr=0.001,
+        lr=0.0001,
         device="cuda",
         progress=False,
         reporter=True,
@@ -248,8 +248,8 @@ class Trainer:
 
         for length, label in zip(lengths, Y): 
             studim = X[offset:offset + length]
-            pred = self.model(studim) # will always be (1,14)
-            prediction.append(pred)  
+            pred, weight = self.model(studim) # will always be (1,14)
+            prediction.append(pred) 
             offset += length
 
         prediction = torch.cat(prediction)
@@ -349,8 +349,8 @@ class Trainer:
                 Yp = Ypreds[task].cpu().numpy()
                 Ya = Yactual[task].cpu().numpy()
 
-                ap = average_precision_score(Ya, Yp)
-                metrics[split + '_avg_prec_' + task] = ap
+                #ap = average_precision_score(Ya, Yp)
+                #metrics[split + '_avg_prec_' + task] = ap
 
                 try:
                     metrics[split + '_auc_' + task] = roc_auc_score(Ya, Yp)
@@ -391,7 +391,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--embed-dim", 
         "-e",
-        default=32, type=int, help="embed_dim for the MHA model"
+        default=64, type=int, help="embed_dim for the MHA model"
     )
     parser.add_argument(
         "--num-heads", 
